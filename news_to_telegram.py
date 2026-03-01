@@ -5,8 +5,8 @@ import os
 import time
 from urllib.parse import quote_plus
 
-BOT_TOKEN = "8696634831:AAEtJmNkmag460hU2TuucAH_srj-JQclvNg"
-CHAT_ID = "7210427083"
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHAT_ID = os.environ["CHAT_ID"]
 
 # 네가 감시할 키워드 목록 (원하는대로 추가)
 KEYWORDS = [
