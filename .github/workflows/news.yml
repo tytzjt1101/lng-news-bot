@@ -25,3 +25,10 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python news_to_telegram.py
+      - name: Commit seen state
+        run: |
+          git config --global user.name "bot"
+          git config --global user.email "bot@github.com"
+          git add seen.json || true
+          git commit -m "update seen articles" || true
+          git push
