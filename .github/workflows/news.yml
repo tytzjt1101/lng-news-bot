@@ -1,19 +1,20 @@
 name: LNG News Alert
 
+permissions:
+  contents: write
+
 on:
   schedule:
-    - cron: "*/30 * * * *"   # 15분마다 실행
+    - cron: "*/30 * * * *"
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -25,10 +26,12 @@ jobs:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: python news_to_telegram.py
+
       - name: Commit seen state
         run: |
-          git config --global user.name "bot"
-          git config --global user.email "bot@github.com"
-          git add seen.json || true
-          git commit -m "update seen articles" || true
+          test -f seen.json || echo "[]" > seen.json
+          git config user.name "bot"
+          git config user.email "bot@github.com"
+          git add seen.json
+          git diff --cached --quiet || git commit -m "update seen articles"
           git push
