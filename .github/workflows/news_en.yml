@@ -1,0 +1,37 @@
+name: LNG News Alert (EN)
+
+permissions:
+  contents: write
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"  # 영어는 30분마다 추천 (원하면 15분으로 바꿔도 됨)
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install packages
+        run: pip install feedparser requests
+
+      - name: Run bot (EN)
+        env:
+          BOT_TOKEN_EN: ${{ secrets.BOT_TOKEN_EN }}
+          CHAT_ID_EN: ${{ secrets.CHAT_ID_EN }}
+        run: python news_to_telegram_en.py
+
+      - name: Commit seen state (EN)
+        run: |
+          test -f seen_en.json || echo "[]" > seen_en.json
+          git config user.name "bot"
+          git config user.email "bot@github.com"
+          git add seen_en.json
+          git diff --cached --quiet || git commit -m "update seen articles (EN)"
+          git push
