@@ -59,7 +59,7 @@ def main():
         feed = feedparser.parse(feed_url)
 
         new_items = []
-        for entry in feed.entries[:30]:
+        for entry in feed.entries[:10]:
             link = getattr(entry, "link", None)
             title = getattr(entry, "title", "")
             if not link:
