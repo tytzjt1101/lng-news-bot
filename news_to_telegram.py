@@ -13,8 +13,10 @@ KEYWORDS = [
     "LNG",
     "Hormuz Strait",
     "Qatar LNG",
-    "JKM",
+    "Shell LNG",
+    "Wael Sawan",
     "Indonesia LNG export",
+    "Tangguh LNG",
     "김지수의 인터스텔라"
 ]
 
@@ -77,4 +79,5 @@ def main():
         save_seen(new_seen)
 
 if __name__ == "__main__":
+
     main()
