@@ -7,8 +7,8 @@ import time
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
 
-BOT_TOKEN = os.environ["BOT_TOKEN_EN_2"]
-CHAT_ID = os.environ["CHAT_ID_EN_2"]
+BOT_TOKEN = os.environ["BOT_TOKEN_EN_2"].strip()
+CHAT_ID = os.environ["CHAT_ID_EN_2"].strip()
 
 HL = "en"
 GL = "US"
@@ -21,7 +21,6 @@ MAX_ITEMS_PER_RUN = 5
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
 
-# 너무 빡세지 않게 완화한 키워드
 KEYWORDS = [
     "peru LNG",
     "\"Peru LNG\" fire",
@@ -72,14 +71,17 @@ def load_seen():
                 data = json.load(f)
                 if isinstance(data, list):
                     return set(data)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"load_seen error: {e}")
     return set()
 
 
 def save_seen(seen):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(list(seen)), f, ensure_ascii=False, indent=2)
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(sorted(list(seen)), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"save_seen error: {e}")
 
 
 def normalize(text: str) -> str:
@@ -131,17 +133,16 @@ def get_importance(title: str, summary: str, source: str):
         score += 1
 
     if score >= 5:
-        return "🔴 HIGH"
+        return "HIGH"
     elif score >= 2:
-        return "🟠 MEDIUM"
+        return "MEDIUM"
     else:
-        return "🟢 LOW"
+        return "LOW"
 
 
 def is_valid_news(title: str, summary: str) -> bool:
     text = f"{title} {summary}".lower()
 
-    # 너무 빡세지 않게 완화
     related = (
         "peru lng" in text
         or ("peru" in text and "lng" in text)
@@ -158,11 +159,6 @@ def is_valid_news(title: str, summary: str) -> bool:
     return True
 
 
-def escape_markdown(text: str) -> str:
-    chars = r"_*[]()~`>#+-=|{}.!"
-    return "".join("\\" + c if c in chars else c for c in text)
-
-
 def shorten(text: str, limit: int = 200) -> str:
     if len(text) <= limit:
         return text
@@ -174,13 +170,13 @@ def send_telegram_message(text: str) -> bool:
     payload = {
         "chat_id": CHAT_ID,
         "text": text,
-        "parse_mode": "MarkdownV2",
         "disable_web_page_preview": False,
     }
 
-    for _ in range(MAX_RETRY):
+    for attempt in range(1, MAX_RETRY + 1):
         try:
             resp = requests.post(url, json=payload, timeout=30)
+            print(f"telegram status={resp.status_code}, body={resp.text[:500]}")
 
             if resp.status_code == 200:
                 time.sleep(SEND_INTERVAL_SECONDS)
@@ -193,14 +189,14 @@ def send_telegram_message(text: str) -> bool:
                     retry_after = int(data.get("parameters", {}).get("retry_after", 10))
                 except Exception:
                     pass
+                print(f"429 retry_after={retry_after}")
                 time.sleep(retry_after + 1)
                 continue
 
-            print(f"Telegram send failed: {resp.status_code} {resp.text}")
             return False
 
         except Exception as e:
-            print(f"Telegram send error: {e}")
+            print(f"Telegram send error (attempt {attempt}): {e}")
             time.sleep(3)
 
     return False
@@ -211,7 +207,9 @@ def fetch_news():
 
     for keyword in KEYWORDS:
         try:
+            print(f"Fetching keyword: {keyword}")
             feed = feedparser.parse(google_news_rss_url(keyword))
+            print(f"Entries fetched: {len(feed.entries)}")
 
             for entry in feed.entries:
                 title = entry.get("title", "").strip()
@@ -257,9 +255,9 @@ def deduplicate_and_sort(items, seen):
     def sort_key(x):
         priority = 1 if is_preferred_source(x["source"]) else 0
         importance_score = 0
-        if "HIGH" in x["importance"]:
+        if x["importance"] == "HIGH":
             importance_score = 2
-        elif "MEDIUM" in x["importance"]:
+        elif x["importance"] == "MEDIUM":
             importance_score = 1
         return (importance_score, priority)
 
@@ -268,27 +266,24 @@ def deduplicate_and_sort(items, seen):
 
 
 def format_message(item):
-    title = escape_markdown(item["title"])
-    source = escape_markdown(item["source"] or "Unknown")
-    summary = escape_markdown(shorten(item["summary"]))
-    importance = escape_markdown(item["importance"])
-    link = item["link"]
+    lines = [
+        f"[{item['importance']}] {item['title']}",
+        f"Source: {item['source'] or 'Unknown'}",
+    ]
 
-    msg = (
-        f"{importance}\n"
-        f"*{title}*\n"
-        f"Source: {source}\n"
-    )
+    if item["summary"]:
+        lines.append(f"Summary: {shorten(item['summary'])}")
 
-    if summary:
-        msg += f"Summary: {summary}\n"
-
-    msg += f"{link}"
-    return msg
+    lines.append(item["link"])
+    return "\n".join(lines)
 
 
 def main():
     print("=== START ===")
+    print(f"CHAT_ID={CHAT_ID}")
+
+    # heartbeat
+    send_telegram_message("Bot started. Checking Peru LNG news.")
 
     if is_quiet_time_kst():
         print("Quiet hours in KST. Skip sending.")
@@ -305,7 +300,7 @@ def main():
 
     if not items:
         print("No new Peru LNG news found.")
-        send_telegram_message("ℹ️ No new Peru LNG news found.")
+        send_telegram_message("No new Peru LNG news found.")
         return
 
     sent = 0
