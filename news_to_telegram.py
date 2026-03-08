@@ -8,6 +8,9 @@ from urllib.parse import quote_plus
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = os.environ["CHAT_ID"]
 
+QUIET_HOUR_START = 21   # 21:00 KST
+QUIET_HOUR_END = 6      # 06:00 KST
+
 # 네가 감시할 키워드 목록 (원하는대로 추가)
 KEYWORDS = [
     "LNG",
@@ -81,3 +84,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
