@@ -14,13 +14,12 @@ QUIET_HOUR_END = 6      # 06:00 KST
 # 네가 감시할 키워드 목록 (원하는대로 추가)
 KEYWORDS = [
     "LNG",
-    "Hormuz Strait",
-    "Qatar LNG",
+    "호르무즈",
+    "카타르 LNG",
     "Shell LNG",
     "Wael Sawan",
-    "Indonesia LNG export",
+    "인도네시아 LNG",
     "Tangguh LNG",
-    "김지수의 인터스텔라"
 ]
 
 # 언어/지역 (원하면 ko-KR로 바꿔도 됨)
@@ -63,7 +62,7 @@ def main():
 
         # 최신글이 위에 오므로, 보기 좋게 오래된 것부터 전송하려고 reverse
         new_items = []
-        for entry in feed.entries[:30]:  # 너무 많으면 스팸되니 상위 30개만
+        for entry in feed.entries[:10]:  # 너무 많으면 스팸되니 상위 30개만
             link = getattr(entry, "link", None)
             title = getattr(entry, "title", "")
             if not link:
@@ -84,4 +83,5 @@ def main():
 if __name__ == "__main__":
 
     main()
+
 
