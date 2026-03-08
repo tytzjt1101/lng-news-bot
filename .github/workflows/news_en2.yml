@@ -1,5 +1,8 @@
 name: LNG News EN 2
 
+permissions:
+  contents: write
+
 on:
   schedule:
     - cron: "*/30 * * * *"
@@ -10,11 +13,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Ensure seen file exists
+        run: |
+          test -f seen_en2.json || echo "[]" > seen_en2.json
 
       - name: Install dependencies
         run: pip install feedparser requests
@@ -24,3 +35,12 @@ jobs:
           BOT_TOKEN_EN_2: ${{ secrets.BOT_TOKEN_EN_2 }}
           CHAT_ID_EN_2: ${{ secrets.CHAT_ID_EN_2 }}
         run: python news_to_telegram_en2.py
+
+      - name: Commit seen state
+        run: |
+          test -f seen_en2.json || echo "[]" > seen_en2.json
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add seen_en2.json
+          git diff --cached --quiet || git commit -m "update seen articles (EN2)"
+          git push
