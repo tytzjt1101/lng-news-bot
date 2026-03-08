@@ -1,0 +1,26 @@
+name: LNG News EN 2
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install feedparser requests
+
+      - name: Run bot
+        env:
+          BOT_TOKEN_EN_2: ${{ secrets.BOT_TOKEN_EN_2 }}
+          CHAT_ID_EN_2: ${{ secrets.CHAT_ID_EN_2 }}
+        run: python news_to_telegram_en2.py
