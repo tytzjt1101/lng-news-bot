@@ -20,9 +20,6 @@ KEYWORDS = [
     "LNG outage",
     "Qatar LNG",
     "US LNG export",
-    "TTF gas price",
-    "China LNG imports",
-    "LNG shipping rates",
 ]
 
 STATE_FILE = "seen_en.json"
@@ -59,7 +56,7 @@ def main():
         feed = feedparser.parse(feed_url)
 
         new_items = []
-        for entry in feed.entries[:10]:
+        for entry in feed.entries[:5]:
             link = getattr(entry, "link", None)
             title = getattr(entry, "title", "")
             if not link:
