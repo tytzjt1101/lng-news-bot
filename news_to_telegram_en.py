@@ -333,24 +333,25 @@ def deduplicate_and_sort(items, seen):
 def format_message(item) -> str:
     title = html.escape(item["title"])
     link = item["link"]
+    summary = html.escape(shorten(item["summary"]))
+    published = html.escape(item["published"]) if item["published"] else ""
     source = html.escape(item["source"] or "Unknown")
     keyword = html.escape(item["keyword"])
     importance = html.escape(item["importance"])
-    summary = html.escape(shorten(item["summary"]))
-    published = html.escape(item["published"]) if item["published"] else ""
 
     lines = [
         f"{importance}",
         f'<a href="{link}">{title}</a>',
-        f"Source: {source}",
-        f"Keyword: {keyword}",
     ]
+
+    if summary:
+        lines.append(f"Summary: {summary}")
 
     if published:
         lines.append(f"Published: {published}")
 
-    if summary:
-        lines.append(f"Summary: {summary}")
+    lines.append(f"Source: {source}")
+    lines.append(f"Keyword: {keyword}")
 
     return "\n".join(lines)
 
