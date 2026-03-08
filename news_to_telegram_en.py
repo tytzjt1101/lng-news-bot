@@ -14,12 +14,18 @@ HL = "en"
 GL = "US"
 CEID = "US:en"
 
+QUIET_HOUR_START = 21   # 21:00 KST
+QUIET_HOUR_END = 6      # 06:00 KST
+
 # EN keywords (원하는대로 나중에 조정)
 KEYWORDS = [
+    "LNG"
     "LNG supply disruption",
     "LNG outage",
     "Qatar LNG",
     "US LNG export",
+    "Shell LNG",
+    "Wael Sawan"
 ]
 
 STATE_FILE = "seen_en.json"
@@ -56,7 +62,7 @@ def main():
         feed = feedparser.parse(feed_url)
 
         new_items = []
-        for entry in feed.entries[:5]:
+        for entry in feed.entries[:10]:           # 10개씩 전송
             link = getattr(entry, "link", None)
             title = getattr(entry, "title", "")
             if not link:
