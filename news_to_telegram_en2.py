@@ -1,47 +1,67 @@
+import feedparser
 import requests
 import json
 import os
 import re
 import time
-import html
+from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN_EN_2", "").strip()
-CHAT_ID = os.environ.get("CHAT_ID_EN_2", "").strip()
-X_BEARER_TOKEN = os.environ.get("X_BEARER_TOKEN", "").strip()
+BOT_TOKEN = os.environ["BOT_TOKEN_EN_2"].strip()
+CHAT_ID = os.environ["CHAT_ID_EN_2"].strip()
 
-STATE_FILE = "seen_x_posts.json"
+HL = "en"
+GL = "US"
+CEID = "US:en"
+STATE_FILE = "seen_en2.json"
 
-QUIET_HOUR_START = 21
-QUIET_HOUR_END = 6
-
-MAX_ITEMS_PER_RUN = 10
-MAX_POSTS_PER_USER = 5
-MAX_ITEMS_PER_USER_AFTER_DEDUP = 2
-MAX_TELEGRAM_MESSAGE_LENGTH = 3800
-
+QUIET_HOUR_START = 21   # 21:00 KST
+QUIET_HOUR_END = 6      # 06:00 KST
+MAX_ITEMS_PER_RUN = 5
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
-REQUEST_TIMEOUT = 30
 
-USE_X = bool(X_BEARER_TOKEN)
-USE_TELEGRAM = bool(BOT_TOKEN and CHAT_ID)
+KEYWORDS = [
+    "peru LNG",
+    "\"Peru LNG\" fire",
+    "\"Peru LNG\" force majeure",
+    "\"Peru LNG\" outage",
+    "\"Peru LNG\" restart",
+]
 
-TRACKED_USERS = [
-    {"name": "Elon Musk", "username": "elonmusk"},
-    {"name": "Tim Cook", "username": "tim_cook"},
-    {"name": "Sam Altman", "username": "sama"},
-    {"name": "Sundar Pichai", "username": "sundarpichai"},
+PREFERRED_SOURCES = ["Reuters", "Bloomberg"]
+
+HIGH_PATTERNS = [
+    r"\bforce majeure\b",
+    r"\bfire\b",
+    r"\boutage\b",
+    r"\bshutdown\b",
+    r"\bdisruption\b",
+    r"\bexplosion\b",
+    r"\brestart\b",
+]
+
+MEDIUM_PATTERNS = [
+    r"\bexport\b",
+    r"\bcargo\b",
+    r"\bsupply\b",
+    r"\bdemand\b",
+    r"\bshipment\b",
+]
+
+BLOCK_PATTERNS = [
+    r"\bstock\b",
+    r"\bshares\b",
+    r"\bdividend\b",
+    r"\bearnings\b",
+    r"\bcrypto\b",
+    r"\bbitcoin\b",
 ]
 
 
-def x_headers():
-    if not USE_X:
-        return {}
-    return {
-        "Authorization": f"Bearer {X_BEARER_TOKEN}",
-        "Content-Type": "application/json",
-    }
+def google_news_rss_url(keyword: str) -> str:
+    q = quote_plus(keyword)
+    return f"https://news.google.com/rss/search?q={q}&hl={HL}&gl={GL}&ceid={CEID}"
 
 
 def load_seen():
@@ -52,7 +72,7 @@ def load_seen():
                 if isinstance(data, list):
                     return set(data)
         except Exception as e:
-            print(f"[WARN] Failed to load {STATE_FILE}: {e}")
+            print(f"load_seen error: {e}")
     return set()
 
 
@@ -61,324 +81,239 @@ def save_seen(seen):
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(sorted(list(seen)), f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[WARN] Failed to save {STATE_FILE}: {e}")
+        print(f"save_seen error: {e}")
 
 
-def is_quiet_time_kst():
-    now = datetime.now(timezone(timedelta(hours=9))).hour
-    return now >= QUIET_HOUR_START or now < QUIET_HOUR_END
+def normalize(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"\s+", " ", text)
+    return text
 
 
-def format_date(date_str):
-    if not date_str:
-        return ""
-
-    formats = [
-        "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%dT%H:%M:%SZ",
-    ]
-
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(date_str, fmt)
-            return dt.strftime("%d %b %Y (%a)")
-        except Exception:
-            pass
-
-    return date_str
-
-
-def clean_text(text):
+def clean_html(text: str) -> str:
     if not text:
         return ""
-    text = html.unescape(text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
-def safe_get(url, headers=None, params=None, timeout=REQUEST_TIMEOUT):
+def get_source(entry) -> str:
     try:
-        r = requests.get(url, headers=headers, params=params, timeout=timeout)
-        return r
-    except requests.RequestException as e:
-        print(f"[WARN] GET request failed: {url} | {e}")
-        return None
+        if hasattr(entry, "source") and entry.source:
+            return entry.source.get("title", "").strip()
+    except Exception:
+        pass
+    return ""
 
 
-def safe_post(url, json_payload=None, timeout=REQUEST_TIMEOUT):
-    try:
-        r = requests.post(url, json=json_payload, timeout=timeout)
-        return r
-    except requests.RequestException as e:
-        print(f"[WARN] POST request failed: {url} | {e}")
-        return None
+def is_quiet_time_kst() -> bool:
+    kst = timezone(timedelta(hours=9))
+    now_kst = datetime.now(kst)
+    hour = now_kst.hour
+    return hour >= QUIET_HOUR_START or hour < QUIET_HOUR_END
 
 
-def get_user_ids():
-    if not USE_X:
-        return {}
-
-    usernames = ",".join([u["username"] for u in TRACKED_USERS])
-    url = "https://api.x.com/2/users/by"
-
-    params = {
-        "usernames": usernames,
-        "user.fields": "username,name",
-    }
-
-    r = safe_get(url, headers=x_headers(), params=params)
-    if r is None:
-        return {}
-
-    if r.status_code != 200:
-        print(f"[WARN] get_user_ids failed: {r.status_code} | {r.text}")
-        return {}
-
-    try:
-        data = r.json()
-    except Exception as e:
-        print(f"[WARN] get_user_ids json parse failed: {e}")
-        return {}
-
-    result = {}
-    for u in data.get("data", []):
-        username = (u.get("username") or "").lower().strip()
-        user_id = (u.get("id") or "").strip()
-        if username and user_id:
-            result[username] = user_id
-
-    return result
+def is_preferred_source(source: str) -> bool:
+    s = source.lower()
+    return any(x.lower() in s for x in PREFERRED_SOURCES)
 
 
-def fetch_posts(user_id):
-    if not USE_X:
-        return []
+def get_importance(title: str, summary: str, source: str):
+    text = f"{title} {summary}".lower()
+    score = 0
 
-    url = f"https://api.x.com/2/users/{user_id}/tweets"
+    if is_preferred_source(source):
+        score += 2
 
-    params = {
-        "max_results": MAX_POSTS_PER_USER,
-        "tweet.fields": "created_at",
-        "exclude": "replies,retweets",
-    }
+    if any(re.search(p, text, re.I) for p in HIGH_PATTERNS):
+        score += 3
+    elif any(re.search(p, text, re.I) for p in MEDIUM_PATTERNS):
+        score += 1
 
-    r = safe_get(url, headers=x_headers(), params=params)
-    if r is None:
-        return []
-
-    if r.status_code != 200:
-        print(f"[WARN] fetch_posts failed for user_id={user_id}: {r.status_code} | {r.text}")
-        return []
-
-    try:
-        data = r.json()
-    except Exception as e:
-        print(f"[WARN] fetch_posts json parse failed for user_id={user_id}: {e}")
-        return []
-
-    posts = data.get("data", [])
-    if not isinstance(posts, list):
-        return []
-
-    return posts
-
-
-def build_link(username, tweet_id):
-    return f"https://x.com/{username}/status/{tweet_id}"
-
-
-def score(text, name):
-    s = 0
-    lower = text.lower()
-
-    keywords = [
-        "ai", "chip", "tesla", "spacex",
-        "apple", "google", "microsoft",
-        "china", "us", "russia", "india",
-        "policy", "market", "energy"
-    ]
-
-    for k in keywords:
-        if k in lower:
-            s += 1
-
-    if name == "Elon Musk":
-        s += 2
-
-    return s
-
-
-def fetch_all():
-    if not USE_X:
-        print("[INFO] X_BEARER_TOKEN not set -> skipping X fetch")
-        return []
-
-    items = []
-    user_ids = get_user_ids()
-
-    if not user_ids:
-        print("[INFO] No user IDs fetched from X API")
-        return []
-
-    for u in TRACKED_USERS:
-        username = u["username"].lower().strip()
-        name = u["name"]
-
-        user_id = user_ids.get(username)
-        if not user_id:
-            print(f"[WARN] user id not found for @{username}")
-            continue
-
-        posts = fetch_posts(user_id)
-
-        for p in posts:
-            text = clean_text(p.get("text", ""))
-            tweet_id = str(p.get("id", "")).strip()
-            created_at = p.get("created_at", "")
-
-            if not text or not tweet_id:
-                continue
-
-            items.append({
-                "uid": f"{username}|{tweet_id}",
-                "name": name,
-                "username": username,
-                "text": text,
-                "date": format_date(created_at),
-                "link": build_link(username, tweet_id),
-                "score": score(text, name),
-            })
-
-        time.sleep(1)
-
-    return items
-
-
-def dedup_sort(items, seen):
-    result = []
-    local = set()
-    count = {}
-
-    for i in items:
-        uid = i["uid"]
-        name = i["name"]
-
-        if uid in seen or uid in local:
-            continue
-
-        if count.get(name, 0) >= MAX_ITEMS_PER_USER_AFTER_DEDUP:
-            continue
-
-        local.add(uid)
-        count[name] = count.get(name, 0) + 1
-        result.append(i)
-
-    result.sort(key=lambda x: x["score"], reverse=True)
-    return result[:MAX_ITEMS_PER_RUN]
-
-
-def format_item(i):
-    body = html.escape(i["text"])
-    return "\n".join([
-        i["name"],
-        i["date"],
-        f'<a href="{i["link"]}">{body}</a>',
-        f"@{i['username']}"
-    ]).strip()
-
-
-def chunk(items):
-    chunks = []
-    current = []
-    length = 0
-
-    for i in items:
-        t = format_item(i)
-        add_len = len(t) + (2 if current else 0)
-
-        if current and length + add_len > MAX_TELEGRAM_MESSAGE_LENGTH:
-            chunks.append(current)
-            current = [t]
-            length = len(t)
-        else:
-            current.append(t)
-            length += add_len
-
-    if current:
-        chunks.append(current)
-
-    result = []
-    total = len(chunks)
-
-    if total == 1:
-        result.append("📰 Social Watch\n\n" + "\n\n".join(chunks[0]))
+    if score >= 5:
+        return "HIGH"
+    elif score >= 2:
+        return "MEDIUM"
     else:
-        for idx, c in enumerate(chunks, 1):
-            result.append(f"📰 Social Watch {idx}/{total}\n\n" + "\n\n".join(c))
-
-    return result
+        return "LOW"
 
 
-def send(msg):
-    if not USE_TELEGRAM:
-        print("[WARN] BOT_TOKEN_EN_2 or CHAT_ID_EN_2 not set -> skipping Telegram send")
+def is_valid_news(title: str, summary: str) -> bool:
+    text = f"{title} {summary}".lower()
+
+    related = (
+        "peru lng" in text
+        or ("peru" in text and "lng" in text)
+        or "pampa melchorita" in text
+        or "melchorita" in text
+    )
+
+    if not related:
         return False
 
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    if any(re.search(p, text, re.I) for p in BLOCK_PATTERNS):
+        return False
 
+    return True
+
+
+def shorten(text: str, limit: int = 200) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit - 3] + "..."
+
+
+def send_telegram_message(text: str) -> bool:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": CHAT_ID,
-        "text": msg,
-        "parse_mode": "HTML",
+        "text": text,
         "disable_web_page_preview": False,
     }
 
     for attempt in range(1, MAX_RETRY + 1):
-        r = safe_post(url, json_payload=payload)
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            print(f"telegram status={resp.status_code}, body={resp.text[:500]}")
 
-        if r is not None and r.status_code == 200:
-            time.sleep(SEND_INTERVAL_SECONDS)
-            return True
+            if resp.status_code == 200:
+                time.sleep(SEND_INTERVAL_SECONDS)
+                return True
 
-        status = r.status_code if r is not None else "NO_RESPONSE"
-        body = r.text if r is not None else ""
-        print(f"[WARN] Telegram send failed ({attempt}/{MAX_RETRY}): {status} | {body}")
-        time.sleep(3)
+            if resp.status_code == 429:
+                retry_after = 10
+                try:
+                    data = resp.json()
+                    retry_after = int(data.get("parameters", {}).get("retry_after", 10))
+                except Exception:
+                    pass
+                print(f"429 retry_after={retry_after}")
+                time.sleep(retry_after + 1)
+                continue
+
+            return False
+
+        except Exception as e:
+            print(f"Telegram send error (attempt {attempt}): {e}")
+            time.sleep(3)
 
     return False
 
 
+def fetch_news():
+    all_items = []
+
+    for keyword in KEYWORDS:
+        try:
+            print(f"Fetching keyword: {keyword}")
+            feed = feedparser.parse(google_news_rss_url(keyword))
+            print(f"Entries fetched: {len(feed.entries)}")
+
+            for entry in feed.entries:
+                title = entry.get("title", "").strip()
+                link = entry.get("link", "").strip()
+                summary = clean_html(entry.get("summary", ""))
+                source = get_source(entry)
+
+                if not title or not link:
+                    continue
+
+                if not is_valid_news(title, summary):
+                    continue
+
+                uid = normalize(title) + "|" + link
+
+                all_items.append({
+                    "uid": uid,
+                    "title": title,
+                    "link": link,
+                    "summary": summary,
+                    "source": source,
+                    "importance": get_importance(title, summary, source),
+                })
+
+            time.sleep(1)
+
+        except Exception as e:
+            print(f"RSS fetch error for keyword [{keyword}]: {e}")
+
+    return all_items
+
+
+def deduplicate_and_sort(items, seen):
+    result = []
+    local_seen = set()
+
+    for item in items:
+        if item["uid"] in seen or item["uid"] in local_seen:
+            continue
+        local_seen.add(item["uid"])
+        result.append(item)
+
+    def sort_key(x):
+        priority = 1 if is_preferred_source(x["source"]) else 0
+        importance_score = 0
+        if x["importance"] == "HIGH":
+            importance_score = 2
+        elif x["importance"] == "MEDIUM":
+            importance_score = 1
+        return (importance_score, priority)
+
+    result.sort(key=sort_key, reverse=True)
+    return result[:MAX_ITEMS_PER_RUN]
+
+
+def format_message(item):
+    lines = [
+        f"[{item['importance']}] {item['title']}",
+        f"Source: {item['source'] or 'Unknown'}",
+    ]
+
+    if item["summary"]:
+        lines.append(f"Summary: {shorten(item['summary'])}")
+
+    lines.append(item["link"])
+    return "\n".join(lines)
+
+
 def main():
+    print("=== START ===")
+    print(f"CHAT_ID={CHAT_ID}")
+
+    # heartbeat
+    send_telegram_message("Bot started. Checking Peru LNG news.")
+
     if is_quiet_time_kst():
-        print("[INFO] Quiet time in KST -> exiting")
+        print("Quiet hours in KST. Skip sending.")
         return
 
     seen = load_seen()
+    print(f"Loaded seen count: {len(seen)}")
 
-    items = fetch_all()
-    items = dedup_sort(items, seen)
+    items = fetch_news()
+    print(f"Fetched raw items: {len(items)}")
+
+    items = deduplicate_and_sort(items, seen)
+    print(f"Items after dedup/sort: {len(items)}")
 
     if not items:
-        print("[INFO] No new items")
+        print("No new Peru LNG news found.")
+        send_telegram_message("No new Peru LNG news found.")
         return
 
-    msgs = chunk(items)
-
-    all_sent = True
-    for m in msgs:
-        if not send(m):
-            all_sent = False
-            break
-
-    if not all_sent:
-        print("[WARN] Some messages failed to send -> not updating seen")
-        return
-
-    for i in items:
-        seen.add(i["uid"])
+    sent = 0
+    for item in items:
+        print(f"Sending: {item['title']}")
+        if send_telegram_message(format_message(item)):
+            seen.add(item["uid"])
+            sent += 1
+        else:
+            print(f"Failed to send: {item['title']}")
 
     save_seen(seen)
-    print(f"[INFO] Done. Sent {len(items)} items.")
+    print(f"Done. Sent {sent} items.")
 
 
 if __name__ == "__main__":
