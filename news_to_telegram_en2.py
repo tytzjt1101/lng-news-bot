@@ -6,17 +6,14 @@ import time
 import html
 from datetime import datetime, timedelta, timezone
 
-from googletrans import Translator
-
-
 BOT_TOKEN = os.environ["BOT_TOKEN_EN_2"].strip()
 CHAT_ID = os.environ["CHAT_ID_EN_2"].strip()
 X_BEARER_TOKEN = os.environ["X_BEARER_TOKEN"].strip()
 
-STATE_FILE = "seen_x_posts_ko.json"
+STATE_FILE = "seen_x_posts.json"
 
-QUIET_HOUR_START = 21   # 21:00 KST
-QUIET_HOUR_END = 6      # 06:00 KST
+QUIET_HOUR_START = 21
+QUIET_HOUR_END = 6
 
 MAX_ITEMS_PER_RUN = 10
 MAX_POSTS_PER_USER = 5
@@ -26,15 +23,11 @@ SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
 REQUEST_TIMEOUT = 30
 
-translator = Translator()
-
 TRACKED_USERS = [
     {"name": "Elon Musk", "username": "elonmusk"},
     {"name": "Tim Cook", "username": "tim_cook"},
     {"name": "Sam Altman", "username": "sama"},
     {"name": "Sundar Pichai", "username": "sundarpichai"},
-    {"name": "Narendra Modi", "username": "narendramodi"},
-    {"name": "Donald Trump", "username": "realDonaldTrump"},
 ]
 
 
@@ -49,352 +42,232 @@ def load_seen():
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return set(data)
-        except Exception as e:
-            print(f"load_seen error: {e}")
+                return set(json.load(f))
+        except:
+            pass
     return set()
 
 
 def save_seen(seen):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(list(seen), f)
+
+
+def is_quiet_time_kst():
+    now = datetime.now(timezone(timedelta(hours=9))).hour
+    return now >= QUIET_HOUR_START or now < QUIET_HOUR_END
+
+
+def format_date(date_str):
     try:
-        with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(list(seen)), f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"save_seen error: {e}")
+        dt = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S.%fZ")
+        return dt.strftime("%d %b %Y (%a)")
+    except:
+        return date_str
 
 
-def is_quiet_time_kst() -> bool:
-    kst = timezone(timedelta(hours=9))
-    now_kst = datetime.now(kst)
-    hour = now_kst.hour
-    return hour >= QUIET_HOUR_START or hour < QUIET_HOUR_END
-
-
-def format_date(date_str: str) -> str:
-    if not date_str:
-        return "Unknown"
-
-    patterns = [
-        "%Y-%m-%dT%H:%M:%S.%fZ",
-        "%Y-%m-%dT%H:%M:%SZ",
-    ]
-
-    for pattern in patterns:
-        try:
-            dt = datetime.strptime(date_str, pattern)
-            return dt.strftime("%d %b %Y (%a)")
-        except Exception:
-            pass
-
-    return date_str
-
-
-def clean_text(text: str) -> str:
-    if not text:
-        return ""
-
+def clean_text(text):
     text = html.unescape(text)
-    text = text.replace("\r", " ").replace("\n", " ")
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
 
 
-def shorten(text: str, limit: int = 280) -> str:
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3].rstrip() + "..."
-
-
-def translate_to_korean(text: str) -> str:
-    if not text:
-        return ""
-    try:
-        result = translator.translate(text, dest="ko")
-        return result.text.strip()
-    except Exception as e:
-        print(f"translate error: {e}")
-        return text
-
-
-def get_user_ids(users):
-    usernames = ",".join([u["username"] for u in users])
+def get_user_ids():
+    usernames = ",".join([u["username"] for u in TRACKED_USERS])
     url = "https://api.x.com/2/users/by"
+
     params = {
         "usernames": usernames,
         "user.fields": "username,name",
     }
 
-    resp = requests.get(url, headers=x_headers(), params=params, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    data = resp.json()
+    r = requests.get(url, headers=x_headers(), params=params)
+    data = r.json()
 
-    user_map = {}
-    for user in data.get("data", []):
-        user_map[user["username"].lower()] = {
-            "id": user["id"],
-            "name": user.get("name", ""),
-            "username": user.get("username", ""),
-        }
+    result = {}
+    for u in data.get("data", []):
+        result[u["username"].lower()] = u["id"]
 
-    return user_map
+    return result
 
 
-def fetch_user_posts(user_id: str):
+def fetch_posts(user_id):
     url = f"https://api.x.com/2/users/{user_id}/tweets"
+
     params = {
         "max_results": MAX_POSTS_PER_USER,
-        "tweet.fields": "created_at,public_metrics,lang",
+        "tweet.fields": "created_at",
         "exclude": "replies,retweets",
     }
 
-    resp = requests.get(url, headers=x_headers(), params=params, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("data", [])
+    r = requests.get(url, headers=x_headers(), params=params)
+    return r.json().get("data", [])
 
 
-def build_post_link(username: str, post_id: str) -> str:
-    return f"https://x.com/{username}/status/{post_id}"
+def build_link(username, tweet_id):
+    return f"https://x.com/{username}/status/{tweet_id}"
 
 
-def score_post(post_text: str, user_name: str) -> int:
-    text = post_text.lower()
-    score = 0
+def score(text, name):
+    s = 0
 
-    important_patterns = [
-        r"\bai\b", r"\bchip\b", r"\bsemiconductor\b", r"\btesla\b", r"\bspacex\b",
-        r"\bapple\b", r"\bgoogle\b", r"\bmicrosoft\b", r"\bopenai\b",
-        r"\bchina\b", r"\bus\b", r"\busa\b", r"\brussia\b", r"\bindia\b",
-        r"\bpolicy\b", r"\btariff\b", r"\btrade\b", r"\benergy\b", r"\blng\b",
-        r"\belection\b", r"\bmarket\b", r"\bfed\b", r"\binterest rate\b",
+    keywords = [
+        "ai", "chip", "tesla", "spacex",
+        "apple", "google", "microsoft",
+        "china", "us", "russia", "india",
+        "policy", "market", "energy"
     ]
 
-    for pattern in important_patterns:
-        if re.search(pattern, text, re.I):
-            score += 2
+    for k in keywords:
+        if k in text.lower():
+            s += 1
 
-    # 길이가 너무 짧은 포스트는 우선순위 낮춤
-    if len(post_text) < 40:
-        score -= 1
+    if name == "Elon Musk":
+        s += 2
 
-    # 주요 인물 가중치
-    if user_name in ["Elon Musk", "Donald Trump"]:
-        score += 2
-    elif user_name in ["Sam Altman", "Tim Cook", "Sundar Pichai", "Narendra Modi"]:
-        score += 1
-
-    return score
+    return s
 
 
-def deduplicate_and_sort(items, seen):
+def fetch_all():
+    items = []
+    user_ids = get_user_ids()
+
+    for u in TRACKED_USERS:
+        username = u["username"]
+        name = u["name"]
+
+        if username not in user_ids:
+            continue
+
+        posts = fetch_posts(user_ids[username])
+
+        for p in posts:
+            text = clean_text(p.get("text", ""))
+            tweet_id = p.get("id")
+
+            if not text:
+                continue
+
+            items.append({
+                "uid": f"{username}|{tweet_id}",
+                "name": name,
+                "username": username,
+                "text": text,
+                "date": format_date(p.get("created_at", "")),
+                "link": build_link(username, tweet_id),
+                "score": score(text, name)
+            })
+
+        time.sleep(1)
+
+    return items
+
+
+def dedup_sort(items, seen):
     result = []
-    local_seen = set()
-    person_counts = {}
+    local = set()
+    count = {}
 
-    for item in items:
-        if item["uid"] in seen or item["uid"] in local_seen:
+    for i in items:
+        if i["uid"] in seen or i["uid"] in local:
             continue
 
-        # 한 사람당 최대 2개까지만
-        count = person_counts.get(item["person"], 0)
-        if count >= 2:
+        if count.get(i["name"], 0) >= 2:
             continue
 
-        local_seen.add(item["uid"])
-        person_counts[item["person"]] = count + 1
-        result.append(item)
+        local.add(i["uid"])
+        count[i["name"]] = count.get(i["name"], 0) + 1
+        result.append(i)
 
     result.sort(key=lambda x: x["score"], reverse=True)
     return result[:MAX_ITEMS_PER_RUN]
 
 
-def fetch_all_posts():
-    all_items = []
-
-    user_map = get_user_ids(TRACKED_USERS)
-
-    for tracked in TRACKED_USERS:
-        username = tracked["username"].lower()
-        person_name = tracked["name"]
-
-        if username not in user_map:
-            print(f"user not found: {username}")
-            continue
-
-        user_id = user_map[username]["id"]
-        real_username = user_map[username]["username"]
-
-        try:
-            posts = fetch_user_posts(user_id)
-            print(f"Fetched {len(posts)} posts from @{real_username}")
-
-            for post in posts:
-                post_id = post.get("id")
-                text = clean_text(post.get("text", ""))
-                created_at = post.get("created_at", "")
-
-                if not post_id or not text:
-                    continue
-
-                link = build_post_link(real_username, post_id)
-                translated_text = translate_to_korean(shorten(text, 300))
-
-                item = {
-                    "uid": f"{real_username}|{post_id}",
-                    "person": person_name,
-                    "username": real_username,
-                    "post_id": post_id,
-                    "text": text,
-                    "text_ko": translated_text,
-                    "created_at": created_at,
-                    "date_text": format_date(created_at),
-                    "link": link,
-                    "score": score_post(text, person_name),
-                }
-
-                all_items.append(item)
-
-            time.sleep(1)
-
-        except Exception as e:
-            print(f"fetch_user_posts error for @{real_username}: {e}")
-
-    return all_items
+def format_item(i):
+    return "\n".join([
+        i["name"],
+        i["date"],
+        f'<a href="{i["link"]}">{html.escape(i["text"])}</a>',
+        f"@{i['username']}"
+    ])
 
 
-def format_message_item(item):
-    person = html.escape(item["person"])
-    date_text = html.escape(item["date_text"] or "Unknown")
-    text_ko = html.escape(item["text_ko"] or item["text"])
-    username = html.escape(item["username"])
+def chunk(items):
+    chunks = []
+    current = []
+    length = 0
 
-    lines = [
-        f"{person}",
-        f"{date_text}",
-        f'<a href="{item["link"]}">{text_ko}</a>',
-        f"Account: @{username}",
-    ]
+    for i in items:
+        t = format_item(i)
 
-    return "\n".join(lines)
+        add_len = len(t) + (2 if current else 0)
 
-
-def chunk_messages(items):
-    temp_chunks = []
-    current_parts = []
-    current_length = 0
-
-    for item in items:
-        item_text = format_message_item(item)
-
-        if current_parts:
-            add_len = len("\n\n") + len(item_text)
+        if current and length + add_len > MAX_TELEGRAM_MESSAGE_LENGTH:
+            chunks.append(current)
+            current = [t]
+            length = len(t)
         else:
-            add_len = len("📰 Social Watch\n\n") + len(item_text)
+            current.append(t)
+            length += add_len
 
-        if current_parts and current_length + add_len > MAX_TELEGRAM_MESSAGE_LENGTH:
-            temp_chunks.append(current_parts)
-            current_parts = [item_text]
-            current_length = len("📰 Social Watch\n\n") + len(item_text)
-        else:
-            current_parts.append(item_text)
-            if len(current_parts) == 1:
-                current_length = len("📰 Social Watch\n\n") + len(item_text)
-            else:
-                current_length += len("\n\n") + len(item_text)
+    if current:
+        chunks.append(current)
 
-    if current_parts:
-        temp_chunks.append(current_parts)
-
-    messages = []
-    total = len(temp_chunks)
+    result = []
+    total = len(chunks)
 
     if total == 1:
-        body = "\n\n".join(temp_chunks[0])
-        messages.append("📰 Social Watch\n\n" + body)
+        result.append("📰 Social Watch\n\n" + "\n\n".join(chunks[0]))
     else:
-        for idx, chunk in enumerate(temp_chunks, start=1):
-            body = "\n\n".join(chunk)
-            messages.append(f"📰 Social Watch {idx}/{total}\n\n" + body)
+        for idx, c in enumerate(chunks, 1):
+            result.append(f"📰 Social Watch {idx}/{total}\n\n" + "\n\n".join(c))
 
-    return messages
+    return result
 
 
-def send_telegram_message(text: str) -> bool:
+def send(msg):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
     payload = {
         "chat_id": CHAT_ID,
-        "text": text,
+        "text": msg,
         "parse_mode": "HTML",
-        "disable_web_page_preview": False,
     }
 
-    for attempt in range(1, MAX_RETRY + 1):
-        try:
-            resp = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-            print(f"telegram status={resp.status_code}, body={resp.text[:500]}")
+    for _ in range(MAX_RETRY):
+        r = requests.post(url, json=payload)
 
-            if resp.status_code == 200:
-                time.sleep(SEND_INTERVAL_SECONDS)
-                return True
+        if r.status_code == 200:
+            time.sleep(SEND_INTERVAL_SECONDS)
+            return True
 
-            if resp.status_code == 429:
-                retry_after = 10
-                try:
-                    data = resp.json()
-                    retry_after = int(data.get("parameters", {}).get("retry_after", 10))
-                except Exception:
-                    pass
-                print(f"429 retry_after={retry_after}")
-                time.sleep(retry_after + 1)
-                continue
-
-            return False
-
-        except Exception as e:
-            print(f"Telegram send error (attempt {attempt}): {e}")
-            time.sleep(3)
+        time.sleep(3)
 
     return False
 
 
 def main():
-    print("=== START ===")
-
     if is_quiet_time_kst():
-        print("Quiet hours in KST. Skip sending.")
         return
 
     seen = load_seen()
-    print(f"Loaded seen count: {len(seen)}")
 
-    items = fetch_all_posts()
-    print(f"Fetched raw items: {len(items)}")
-
-    items = deduplicate_and_sort(items, seen)
-    print(f"Items after dedup/sort: {len(items)}")
+    items = fetch_all()
+    items = dedup_sort(items, seen)
 
     if not items:
-        print("No new direct social posts found.")
         return
 
-    messages = chunk_messages(items)
-    print(f"Message chunks: {len(messages)}")
+    msgs = chunk(items)
 
-    all_sent = True
-    for msg in messages:
-        ok = send_telegram_message(msg)
-        if not ok:
-            all_sent = False
-            break
+    for m in msgs:
+        if not send(m):
+            return
 
-    if all_sent:
-        for item in items:
-            seen.add(item["uid"])
-        save_seen(seen)
+    for i in items:
+        seen.add(i["uid"])
 
-    print(f"Done. Sent {len(items) if all_sent else 0} items.")
+    save_seen(seen)
 
 
 if __name__ == "__main__":
