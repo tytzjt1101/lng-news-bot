@@ -107,6 +107,15 @@ def clean_html_text(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).strip()
 
 
+def format_date(date_str):
+    """Fri, 10 Apr 2026 12:00:00 GMT → 10 Apr 2026 (Fri)"""
+    try:
+        dt = datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
+        return dt.strftime("%d %b %Y (%a)")
+    except:
+        return date_str or "Unknown"
+
+
 def is_quiet_time_kst():
     now = datetime.now(timezone(timedelta(hours=9))).hour
     return now >= QUIET_HOUR_START or now < QUIET_HOUR_END
@@ -154,6 +163,7 @@ def fetch_news():
             title = entry.get("title", "")
             link = entry.get("link", "")
             summary = clean_html_text(entry.get("summary", ""))
+
             if not title or not link:
                 continue
             if not is_recent_entry(entry):
@@ -167,7 +177,7 @@ def fetch_news():
                 "link": link,
                 "source": get_source(entry),
                 "keyword": kw,
-                "published": entry.get("published", ""),
+                "published": format_date(entry.get("published", "")),
                 "importance": get_importance(title, summary, get_source(entry)),
             })
         time.sleep(1)
@@ -193,7 +203,7 @@ def deduplicate_and_sort(items, seen):
 def format_single_item(item):
     return "\n".join([
         item["importance"],
-        f"Published: {html.escape(item['published'] or 'Unknown')}",
+        html.escape(item["published"]),
         f'<a href="{item["link"]}">{html.escape(item["title"])}</a>',
         f"Source: {html.escape(item['source'] or 'Unknown')}",
         f"Keyword: {html.escape(item['keyword'])}",
