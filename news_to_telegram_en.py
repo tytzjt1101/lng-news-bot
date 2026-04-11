@@ -1,4 +1,5 @@
-# 미국·중국·일본·인도·싱가포르·동남아·유럽·중동·중남미·아프리카 뉴스
+# 지역별 quota 기반으로 당일 한국어 세계 주요뉴스를 수집·선별해
+# 텔레그램으로 보내는 뉴스 다이제스트 봇
 
 import feedparser
 import requests
@@ -154,7 +155,7 @@ REGION_PATTERNS = {
     ],
     "middle_east": [
         r"\b중동\b", r"\b이란\b", r"\b사우디\b", r"\b이스라엘\b", r"\b카타르\b", r"\buae\b",
-        r"\bira[nq]\b", r"\bsaudi\b", r"\bisrael\b", r"\bqatar\b", r"\babu dhabi\b",
+        r"\biran\b", r"\biraq\b", r"\bsaudi\b", r"\bisrael\b", r"\bqatar\b", r"\babu dhabi\b",
         r"\b호르무즈\b", r"\btehran\b", r"\briyadh\b", r"\bgaza\b",
     ],
     "latam": [
@@ -170,7 +171,7 @@ REGION_PATTERNS = {
 
 # 한국 중심 기사 감점/제외용
 KOREA_HEAVY_PATTERNS = [
-    r"\b한국\b", r"\b국내\b", r"\b우리나라\b", r"\b정부\b", r"\b원화\b", r"\b코스피\b",
+    r"\b한국\b", r"\b국내\b", r"\b우리나라\b", r"\b원화\b", r"\b코스피\b",
     r"\b삼성\b", r"\b현대\b", r"\bsk\b", r"\blg\b", r"\b한국은행\b",
     r"\bkorea\b", r"\bsouth korea\b", r"\bkospi\b",
     r"한국에 미치는", r"국내 영향", r"한국 증시", r"한국 수출", r"국내 업계",
@@ -298,7 +299,7 @@ def source_tier(source: str) -> int:
         return 2
     return 3
 
-def parse_entry_datetime(entry) -> datetime | None:
+def parse_entry_datetime(entry):
     try:
         if hasattr(entry, "published_parsed") and entry.published_parsed:
             return datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=UTC)
@@ -311,12 +312,12 @@ def parse_entry_datetime(entry) -> datetime | None:
         pass
     return None
 
-def is_today_kst(entry_dt: datetime | None) -> bool:
+def is_today_kst(entry_dt):
     if not entry_dt:
         return False
     return entry_dt.astimezone(KST).date() == datetime.now(KST).date()
 
-def contains_any_pattern(text: str, patterns: list[str]) -> bool:
+def contains_any_pattern(text: str, patterns) -> bool:
     return any(re.search(p, text, re.I) for p in patterns)
 
 def get_text_blob(title: str, summary: str, keyword: str = "") -> str:
@@ -342,7 +343,7 @@ def topic_overlap(sig1: str, sig2: str) -> bool:
     min_size = min(len(s1), len(s2))
     return intersection >= 2 and intersection / min_size >= 0.5
 
-def guess_region(title: str, summary: str, keyword: str) -> str | None:
+def guess_region(title: str, summary: str, keyword: str):
     text = get_text_blob(title, summary, keyword)
     region_scores = {}
 
@@ -371,46 +372,14 @@ def is_event_worthy(title: str, summary: str, keyword: str) -> bool:
     if contains_any_pattern(text, BLOCK_PATTERNS):
         return False
 
-    # 이벤트 중심: high면 통과, medium만 있으면 소극적 허용
     if contains_any_pattern(text, HIGH_PATTERNS):
         return True
 
     if contains_any_pattern(text, MEDIUM_PATTERNS):
-        # medium 기사라도 지역/국가 맥락이 분명할 때만
         region = guess_region(title, summary, keyword)
         return region is not None
 
     return False
-
-def classify_category(item) -> str:
-    text = get_text_blob(item["title"], item.get("summary", ""))
-
-    if contains_any_pattern(text, [
-        r"\bwar\b", r"\bconflict\b", r"\bsanctions?\b", r"\btariffs?\b", r"\bmilitary\b",
-        r"\bmissile\b", r"\bdiplomacy\b", r"\bsummit\b",
-        r"전쟁", r"분쟁", r"제재", r"관세", r"미사일", r"외교", r"정상회담"
-    ]):
-        return "geopolitics"
-
-    if contains_any_pattern(text, [
-        r"\binflation\b", r"\binterest rate\b", r"\bcentral bank\b", r"\brecession\b",
-        r"\beconomy\b", r"\bmarket\b", r"인플레이션", r"금리", r"중앙은행", r"침체", r"경제", r"시장"
-    ]):
-        return "economy"
-
-    if contains_any_pattern(text, [
-        r"\boil\b", r"\bgas\b", r"\blng\b", r"\benergy\b", r"\bopec\b",
-        r"원유", r"가스", r"\bLNG\b", r"에너지"
-    ]):
-        return "energy"
-
-    if contains_any_pattern(text, [
-        r"\bai\b", r"\bsemiconductor\b", r"\bchip\b", r"\btechnology\b",
-        r"AI", r"반도체", r"칩", r"기술"
-    ]):
-        return "tech"
-
-    return "other"
 
 def calculate_score(item, selected_signatures=None):
     title = item["title"]
@@ -419,28 +388,23 @@ def calculate_score(item, selected_signatures=None):
     text = get_text_blob(title, summary)
     score = 0
 
-    # 중요 이벤트
     if contains_any_pattern(text, HIGH_PATTERNS):
         score += 8
     elif contains_any_pattern(text, MEDIUM_PATTERNS):
         score += 3
 
-    # 출처
     tier = source_tier(source)
     if tier == 1:
         score += 4
     elif tier == 2:
         score += 2
 
-    # 한국 중심 기사 감점
     if is_korea_heavy_news(title, summary):
         score -= 6
 
-    # 저품질 감점
     if contains_any_pattern(text, LOW_QUALITY_PATTERNS):
         score -= 3
 
-    # 글로벌 영향 키워드
     if contains_any_pattern(text, [
         r"\bglobal\b", r"\bworld\b", r"\binternational\b", r"\bmajor\b",
         r"\bcentral bank\b", r"\bsupply chain\b", r"\benergy crisis\b",
@@ -448,11 +412,9 @@ def calculate_score(item, selected_signatures=None):
     ]):
         score += 2
 
-    # 지역성이 분명하면 가점
     if item.get("region"):
         score += 2
 
-    # 같은 사건 반복 감점
     if selected_signatures:
         for sig in selected_signatures:
             if topic_overlap(item["topic_signature"], sig):
@@ -460,10 +422,6 @@ def calculate_score(item, selected_signatures=None):
                 break
 
     return score
-
-def prune_seen_today_only(seen_map: dict) -> dict:
-    today_str = datetime.now(KST).strftime("%Y-%m-%d")
-    return {k: v for k, v in seen_map.items() if v == today_str}
 
 def build_uid(link: str, title: str) -> str:
     return f"{link}|{normalize_title(title)}"
@@ -475,6 +433,10 @@ def short_summary(text: str, max_len: int = 110) -> str:
     if len(text) <= max_len:
         return text
     return text[:max_len].rstrip() + "..."
+
+def prune_seen_today_only(seen_map: dict) -> dict:
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
+    return {k: v for k, v in seen_map.items() if v == today_str}
 
 # =========================
 # FETCH
@@ -505,12 +467,9 @@ def fetch_news():
                         continue
 
                     guessed_region = guess_region(title, summary, kw)
-
-                    # 검색 region과 실제 region이 너무 다르면 제외
-                    # 단, 쿼리상 region을 전혀 못 잡은 경우는 query region 사용
                     final_region = guessed_region or region
+
                     if guessed_region and guessed_region != region:
-                        # 미국 쿼리에서 중국 기사가 잡히는 식의 오염 방지
                         continue
 
                     item = {
@@ -525,7 +484,6 @@ def fetch_news():
                         "published": format_date(entry_dt),
                         "region": final_region,
                     }
-                    item["category"] = classify_category(item)
                     item["topic_signature"] = extract_topic_signature(title)
                     items.append(item)
 
@@ -565,9 +523,8 @@ def deduplicate_by_topic(items):
     final = []
     selected_signatures = []
 
-    # 일단 고득점순 정렬
     for item in items:
-        item["score"] = calculate_score(item, selected_signatures=None)
+        item["score"] = calculate_score(item)
 
     items = sorted(
         items,
@@ -601,17 +558,16 @@ def pick_region_items(items):
     region_selected = {region: [] for region in REGION_QUOTA.keys()}
     region_candidates = {region: [] for region in REGION_QUOTA.keys()}
 
-    # 지역별 분배
     for item in items:
         region = item.get("region")
         if region in region_candidates:
             region_candidates[region].append(item)
 
-    # 지역별 정렬
     for region, candidates in region_candidates.items():
         selected_signatures = []
         for item in candidates:
             item["score"] = calculate_score(item, selected_signatures)
+
         candidates.sort(
             key=lambda x: (
                 x["score"],
@@ -626,11 +582,9 @@ def pick_region_items(items):
             if len(picked) >= REGION_QUOTA[region]:
                 break
 
-            # 같은 지역 내 같은 사건 중복 방지
             if any(topic_overlap(item["topic_signature"], p["topic_signature"]) for p in picked):
                 continue
 
-            # 너무 한국 영향 해설 중심이면 제외
             if is_korea_heavy_news(item["title"], item["summary"]):
                 continue
 
@@ -669,14 +623,12 @@ def fill_global_extras(items, region_selected):
     for item in leftovers:
         if len(extras) >= BONUS_GLOBAL_SLOT_COUNT:
             break
-
         if any(topic_overlap(item["topic_signature"], s) for s in [e["topic_signature"] for e in extras]):
             continue
         if any(topic_overlap(item["topic_signature"], s) for s in selected_signatures):
             continue
         if is_korea_heavy_news(item["title"], item["summary"]):
             continue
-
         extras.append(item)
 
     return extras
@@ -741,7 +693,6 @@ def chunk_messages(grouped_entries):
         else:
             block = format_single_item(payload) + "\n"
 
-        # 헤더/아이템 사이 공백
         block = block + "\n"
 
         if len(current) + len(block) > MAX_TELEGRAM_MESSAGE_LENGTH:
@@ -819,7 +770,6 @@ def main():
     print(f"[INFO] Deduped by topic items: {len(deduped_items)}")
 
     region_selected = pick_region_items(deduped_items)
-
     total_region_count = sum(len(v) for v in region_selected.values())
     print(f"[INFO] Region selected count: {total_region_count}")
 
@@ -838,17 +788,20 @@ def main():
         save_seen(seen_map)
         return
 
-    # score / importance 정리
     selected_signatures = []
     for item in final_items:
         item["score"] = calculate_score(item, selected_signatures)
         selected_signatures.append(item["topic_signature"])
+
     final_items = attach_importance_label(final_items)
 
-    # region_selected / extras에 score 반영된 객체 다시 반영
     final_uid_map = {x["uid"]: x for x in final_items}
     for region in list(region_selected.keys()):
-        region_selected[region] = [final_uid_map[x["uid"]] for x in region_selected[region] if x["uid"] in final_uid_map]
+        region_selected[region] = [
+            final_uid_map[x["uid"]]
+            for x in region_selected[region]
+            if x["uid"] in final_uid_map
+        ]
     extras = [final_uid_map[x["uid"]] for x in extras if x["uid"] in final_uid_map]
 
     grouped_entries = flatten_grouped_items(region_selected, extras)
@@ -867,7 +820,10 @@ def main():
             seen_map[item["uid"]] = today_str
 
     save_seen(seen_map)
-    print(f"[INFO] Done. Sent {len(final_items) if all_sent else 0} items in {len(messages) if all_sent else 0} message(s).")
+    print(
+        f"[INFO] Done. Sent {len(final_items) if all_sent else 0} items "
+        f"in {len(messages) if all_sent else 0} message(s)."
+    )
 
 if __name__ == "__main__":
     main()
