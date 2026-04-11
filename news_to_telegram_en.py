@@ -1,3 +1,5 @@
+# 미국·중국·일본·인도·싱가포르·동남아·유럽·중동·중남미·아프리카 뉴스
+
 import feedparser
 import requests
 import json
@@ -8,257 +10,276 @@ import html
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
 
+# =========================
+# ENV
+# =========================
 BOT_TOKEN = os.environ["BOT_TOKEN_EN"].strip()
 CHAT_ID = os.environ["CHAT_ID_EN"].strip()
 
+# 한국어 기사 우선
 HL = "ko"
 GL = "KR"
 CEID = "KR:ko"
 
-STATE_FILE = "seen_world_ko.json"
+STATE_FILE = "seen_world_region_ko_today.json"
+
+# =========================
+# BASIC CONFIG
+# =========================
+KST = timezone(timedelta(hours=9))
+UTC = timezone.utc
 
 QUIET_HOUR_START = 21
 QUIET_HOUR_END = 6
-
-MAX_ITEMS_PER_RUN = 10
-MAX_ENTRIES_PER_KEYWORD = 10
-MAX_AGE_DAYS = 30
 
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
 REQUEST_TIMEOUT = 20
 MAX_TELEGRAM_MESSAGE_LENGTH = 3800
 
-MAX_PER_CATEGORY = {
-    "geopolitics": 2,
-    "economy": 2,
-    "energy": 2,
-    "tech": 2,
-    "supply_chain": 1,
-    "climate": 1,
-    "culture": 2,
-    "lifestyle": 1,
-    "health": 1,
-    "other": 1,
+# 지역별 목표 기사 수
+REGION_QUOTA = {
+    "us": 3,
+    "china": 2,
+    "japan": 1,
+    "india": 1,
+    "singapore": 1,
+    "sea_other": 1,
+    "europe": 1,
+    "middle_east": 1,
+    "latam": 1,
+    "africa": 1,
 }
 
-KEYWORDS = [
-    # Core
-    "war conflict geopolitics",
-    "전쟁 분쟁 지정학",
-    "sanctions tariffs export ban",
-    "제재 관세 수출금지",
-    "china us russia middle east",
-    "중국 미국 러시아 중동",
-    "inflation interest rate central bank",
-    "인플레이션 금리 중앙은행",
-    "global economy recession",
-    "글로벌 경제 침체",
-    "oil gas lng energy crisis",
-    "원유 가스 LNG 에너지 위기",
-    "supply chain shipping logistics",
-    "공급망 해운 물류",
-    "ai semiconductor technology",
-    "AI 반도체 기술",
+# 지역별 내부 검색 키워드
+REGION_KEYWORDS = {
+    "us": [
+        "미국 정치 경제 외교",
+        "미국 연준 금리 관세",
+        "미국 빅테크 AI 반도체",
+        "미국 무역 정책 제조업",
+    ],
+    "china": [
+        "중국 경제 부동산 산업정책",
+        "중국 외교 미중갈등 반도체",
+        "중국 경기부양 수출 내수",
+    ],
+    "japan": [
+        "일본 경제 엔화 반도체 정책",
+        "일본 정치 외교 방위",
+    ],
+    "india": [
+        "인도 경제 제조업 인프라",
+        "인도 외교 정책 산업",
+    ],
+    "singapore": [
+        "싱가포르 경제 금융 정책",
+        "싱가포르 항만 물류 에너지",
+        "싱가포르 반도체 산업 투자",
+    ],
+    "sea_other": [
+        "인도네시아 베트남 태국 말레이시아 필리핀 경제 정치",
+        "동남아 공급망 제조업 외교",
+        "인도네시아 베트남 에너지 인프라",
+    ],
+    "europe": [
+        "유럽 경기 산업 규제",
+        "EU 독일 프랑스 영국 정책",
+        "유럽 중앙은행 방산 에너지",
+    ],
+    "middle_east": [
+        "중동 이란 사우디 이스라엘 에너지",
+        "호르무즈 석유 LNG 외교",
+        "중동 전쟁 휴전 제재",
+    ],
+    "latam": [
+        "브라질 멕시코 아르헨티나 정치 경제",
+        "중남미 자원 통화 대선",
+        "브라질 멕시코 산업 무역",
+    ],
+    "africa": [
+        "아프리카 쿠데타 광물 인프라 에너지",
+        "나이지리아 남아공 이집트 에티오피아 경제",
+        "아프리카 항만 자원 중국 투자",
+    ],
+}
 
-    # Expansion
-    "healthcare biotech pharmaceutical",
-    "보건 바이오 제약",
-    "education labor market workforce",
-    "교육 노동시장 고용",
-    "infrastructure construction urban development",
-    "인프라 건설 도시개발",
-    "environment sustainability carbon",
-    "환경 지속가능 탄소",
+REGION_LABELS = {
+    "us": "🇺🇸 미국",
+    "china": "🇨🇳 중국",
+    "japan": "🇯🇵 일본",
+    "india": "🇮🇳 인도",
+    "singapore": "🇸🇬 싱가포르",
+    "sea_other": "🌏 기타 동남아",
+    "europe": "🇪🇺 유럽",
+    "middle_east": "🛢 중동",
+    "latam": "🌎 중남미",
+    "africa": "🌍 아프리카",
+    "global_extra": "🌐 글로벌 추가 주요뉴스",
+}
 
-    # Light politics / diplomacy
-    "election political shift diplomacy summit",
-    "선거 정치변화 외교 정상회담",
+# 지역별 대표 국가/단어 매칭
+REGION_PATTERNS = {
+    "us": [
+        r"\b미국\b", r"\b워싱턴\b", r"\b연준\b", r"\b백악관\b", r"\b트럼프\b", r"\b바이든\b",
+        r"\busa\b", r"\bunited states\b", r"\bu\.s\.\b", r"\bfed\b", r"\bwhite house\b",
+    ],
+    "china": [
+        r"\b중국\b", r"\b베이징\b", r"\b상하이\b", r"\b시진핑\b",
+        r"\bchina\b", r"\bbeijing\b",
+    ],
+    "japan": [
+        r"\b일본\b", r"\b도쿄\b", r"\b엔화\b", r"\b일본은행\b",
+        r"\bjapan\b", r"\btokyo\b", r"\bboj\b",
+    ],
+    "india": [
+        r"\b인도\b", r"\b뉴델리\b", r"\b모디\b",
+        r"\bindia\b", r"\bnew delhi\b", r"\bmodi\b",
+    ],
+    "singapore": [
+        r"\b싱가포르\b", r"\b싱가폴\b",
+        r"\bsingapore\b", r"\bmas\b",
+    ],
+    "sea_other": [
+        r"\b인도네시아\b", r"\b베트남\b", r"\b태국\b", r"\b말레이시아\b", r"\b필리핀\b",
+        r"\b자카르타\b", r"\b하노이\b", r"\b방콕\b", r"\b쿠알라룸푸르\b", r"\b마닐라\b",
+        r"\bindonesia\b", r"\bvietnam\b", r"\bthailand\b", r"\bmalaysia\b", r"\bphilippines\b",
+        r"\bjakarta\b", r"\bhanoi\b", r"\bbangkok\b", r"\bkuala lumpur\b", r"\bmanila\b",
+    ],
+    "europe": [
+        r"\b유럽\b", r"\beu\b", r"\beurope\b", r"\b유럽연합\b",
+        r"\b독일\b", r"\b프랑스\b", r"\b영국\b", r"\b이탈리아\b", r"\b스페인\b",
+        r"\bgermany\b", r"\bfrance\b", r"\buk\b", r"\bitaly\b", r"\bspain\b",
+        r"\becb\b", r"\b브뤼셀\b", r"\bbrussels\b",
+    ],
+    "middle_east": [
+        r"\b중동\b", r"\b이란\b", r"\b사우디\b", r"\b이스라엘\b", r"\b카타르\b", r"\buae\b",
+        r"\bira[nq]\b", r"\bsaudi\b", r"\bisrael\b", r"\bqatar\b", r"\babu dhabi\b",
+        r"\b호르무즈\b", r"\btehran\b", r"\briyadh\b", r"\bgaza\b",
+    ],
+    "latam": [
+        r"\b중남미\b", r"\b브라질\b", r"\b멕시코\b", r"\b아르헨티나\b", r"\b칠레\b", r"\b페루\b",
+        r"\blatin america\b", r"\bbrasil\b", r"\bbrazil\b", r"\bmexico\b", r"\bargentina\b",
+        r"\bchile\b", r"\bperu\b",
+    ],
+    "africa": [
+        r"\b아프리카\b", r"\b나이지리아\b", r"\b남아공\b", r"\b이집트\b", r"\b에티오피아\b", r"\b케냐\b",
+        r"\bafrica\b", r"\bnigeria\b", r"\bsouth africa\b", r"\begypt\b", r"\bethiopia\b", r"\bkenya\b",
+    ],
+}
 
-    # Culture
-    "art exhibition museum architecture",
-    "미술 전시 박물관 건축",
-    "classical music opera concert",
-    "클래식 음악 오페라 공연",
-    "film festival cultural trend",
-    "영화제 문화 트렌드",
-    "sports major event olympics world cup",
-    "스포츠 올림픽 월드컵",
-
-    # Side
-    "wine industry vineyard",
-    "와인 산업 포도밭",
-    "specialty coffee market",
-    "스페셜티 커피 시장",
-
-    # Discovery
-    "global trends innovation future",
-    "세계 변화 트렌드 혁신",
-    "emerging markets frontier economy",
-    "신흥시장 프론티어 경제",
-    "technology breakthrough research",
-    "기술 혁신 연구",
-    "global risk uncertainty",
-    "글로벌 리스크 불확실성",
+# 한국 중심 기사 감점/제외용
+KOREA_HEAVY_PATTERNS = [
+    r"\b한국\b", r"\b국내\b", r"\b우리나라\b", r"\b정부\b", r"\b원화\b", r"\b코스피\b",
+    r"\b삼성\b", r"\b현대\b", r"\bsk\b", r"\blg\b", r"\b한국은행\b",
+    r"\bkorea\b", r"\bsouth korea\b", r"\bkospi\b",
+    r"한국에 미치는", r"국내 영향", r"한국 증시", r"한국 수출", r"국내 업계",
 ]
 
-PREFERRED_SOURCES = [
-    "Reuters",
-    "Bloomberg",
-    "Financial Times",
-    "The Economist",
-    "BBC",
-    "BBC News",
-    "CNN",
-    "AP News",
-    "Associated Press",
-    "New York Times",
-    "Wall Street Journal",
-    "WSJ",
-    "Al Jazeera",
-    "Nikkei",
-    "로이터",
-    "블룸버그",
-    "연합뉴스",
-    "BBC News 코리아",
+# 예외적으로 허용할 수 있는 국제 사건
+KOREA_EXCEPTION_PATTERNS = [
+    r"\b한미\b", r"\b한중\b", r"\b한일\b", r"\b정상회담\b", r"\b외교\b",
+    r"\bkorea-us\b", r"\bkorea china\b", r"\bkorea japan\b",
 ]
 
+# 중요 이벤트
 HIGH_PATTERNS = [
-    # Geopolitics / security
     r"\bwar\b", r"\bconflict\b", r"\battack\b", r"\bmissile\b", r"\bstrike\b",
-    r"\bceasefire\b", r"\bsanctions?\b", r"\bcoup\b", r"\bterror\b",
-    r"\bexport ban\b", r"\bembargo\b", r"\bmilitary\b",
-    r"전쟁", r"분쟁", r"공습", r"공격", r"미사일", r"휴전", r"제재", r"쿠데타", r"봉쇄",
-
-    # Macro / policy
-    r"\brecession\b", r"\binflation\b", r"\binterest rate\b", r"\bcentral bank\b",
-    r"\btariffs?\b", r"\bpolicy shift\b", r"\bregulation\b",
-    r"침체", r"인플레이션", r"금리", r"중앙은행", r"관세", r"규제",
-
-    # Energy / supply
-    r"\boutage\b", r"\bshutdown\b", r"\bforce majeure\b", r"\bdisruption\b",
-    r"\bexplosion\b", r"\bfire\b", r"\benergy crisis\b",
-    r"\bsupply chain\b", r"\bshipping disruption\b", r"\bpanama canal\b", r"\bsuez\b",
-    r"가동중단", r"운영중단", r"셧다운", r"폭발", r"화재", r"에너지 위기", r"공급망", r"물류 차질",
-
-    # Climate / health
-    r"\bdisaster\b", r"\boutbreak\b", r"\bpandemic\b", r"\bearthquake\b", r"\bflood\b", r"\bwildfire\b",
-    r"재난", r"대유행", r"감염병", r"지진", r"홍수", r"산불",
+    r"\bceasefire\b", r"\bsanctions?\b", r"\bcoup\b", r"\btariffs?\b",
+    r"\bcentral bank\b", r"\binterest rate\b", r"\binflation\b", r"\brecession\b",
+    r"\bexport control\b", r"\bexport ban\b", r"\bembargo\b", r"\bshutdown\b",
+    r"\bforce majeure\b", r"\boutage\b", r"\bexplosion\b", r"\bfire\b",
+    r"\belection\b", r"\bpolicy shift\b", r"\bregulation\b",
+    r"\bsummit\b", r"\bdeal\b", r"\bagreement\b", r"\btrade\b",
+    r"전쟁", r"분쟁", r"공격", r"미사일", r"휴전", r"제재", r"관세", r"금리", r"인플레이션",
+    r"중앙은행", r"침체", r"수출통제", r"수출금지", r"셧다운", r"가동중단",
+    r"폭발", r"화재", r"선거", r"정책 변화", r"규제", r"정상회담", r"합의", r"무역",
 ]
 
 MEDIUM_PATTERNS = [
-    # Politics / diplomacy
-    r"\belection\b", r"\bvote\b", r"\bdiplomacy\b", r"\bsummit\b",
-    r"선거", r"투표", r"외교", r"정상회담",
+    r"\beconomy\b", r"\bmarket\b", r"\bindustry\b", r"\bmanufacturing\b",
+    r"\benergy\b", r"\blng\b", r"\boil\b", r"\bgas\b", r"\bsemiconductor\b", r"\bai\b",
+    r"경제", r"시장", r"산업", r"제조업", r"에너지", r"LNG", r"원유", r"가스", r"반도체", r"AI",
+]
 
-    # Macro / markets
-    r"\beconomy\b", r"\bmarket\b", r"\btrade\b", r"\bpolicy\b",
-    r"경제", r"시장", r"무역", r"정책",
-
-    # Energy
-    r"\boil\b", r"\bgas\b", r"\blng\b", r"\benergy\b", r"\bopec\b",
-    r"원유", r"가스", r"엘엔지", r"LNG", r"에너지",
-
-    # Tech
-    r"\bai\b", r"\bsemiconductor\b", r"\bchip\b", r"\btechnology\b",
-    r"AI", r"반도체", r"칩", r"기술",
-
-    # Supply / climate / health
-    r"\bshipping\b", r"\blogistics\b", r"\bclimate\b", r"\bcarbon\b",
-    r"\bhealth\b", r"\bbiotech\b",
-    r"해운", r"물류", r"기후", r"탄소", r"보건", r"바이오",
-
-    # Culture
-    r"\bart\b", r"\bmuseum\b", r"\barchitecture\b", r"\bopera\b", r"\bconcert\b",
-    r"\bfilm festival\b", r"\bolympics\b", r"\bworld cup\b",
-    r"미술", r"박물관", r"건축", r"오페라", r"공연", r"영화제", r"올림픽", r"월드컵",
-
-    # Lifestyle
-    r"\bwine\b", r"\bcoffee\b", r"\bvineyard\b",
-    r"와인", r"커피", r"포도밭",
+LOW_QUALITY_PATTERNS = [
+    r"\bopinion\b", r"\beditorial\b", r"\bcolumn\b", r"\bslideshow\b",
+    r"\binterview\b", r"\bpreview\b", r"\bfeature\b",
+    r"사설", r"칼럼", r"포토", r"화보", r"인터뷰", r"전망",
 ]
 
 BLOCK_PATTERNS = [
     r"\bcelebrity\b", r"\bgossip\b", r"\bscandal\b", r"\breality show\b",
-    r"연예", r"가십", r"스캔들",
-
     r"\btransfer rumor\b", r"\bmatch preview\b", r"\bfantasy\b",
-    r"이적설", r"경기 예상", r"판타지",
-
     r"\bbitcoin\b", r"\bcrypto\b", r"\betf\b", r"\bdividend\b", r"\bstock tips?\b",
-    r"비트코인", r"코인", r"ETF", r"배당", r"종목 추천",
-
     r"\bfashion\b", r"\bmakeup\b", r"\bdating\b", r"\btravel tips\b",
+    r"연예", r"가십", r"스캔들", r"이적설", r"경기 예상", r"판타지",
+    r"비트코인", r"코인", r"ETF", r"배당", r"종목 추천",
     r"패션", r"메이크업", r"연애", r"여행 팁",
 ]
 
-MAJOR_SPORTS_PATTERNS = [
-    r"\bolympics\b", r"\bworld cup\b", r"\bgrand slam\b", r"\bchampions league\b",
-    r"올림픽", r"월드컵", r"그랜드슬램", r"챔피언스리그",
+# 출처 우선순위
+TIER1_SOURCES = [
+    "Reuters", "로이터",
+    "Bloomberg", "블룸버그",
+    "연합뉴스",
+    "Nikkei", "니케이",
+    "Financial Times", "FT",
+    "BBC", "AP", "Associated Press",
+]
+TIER2_SOURCES = [
+    "한국경제", "매일경제", "조선비즈", "서울경제", "이데일리",
+    "머니투데이", "아시아경제", "중앙일보", "동아일보", "한겨레",
 ]
 
+# 초대형 사건 보너스 슬롯
+ALLOW_BONUS_GLOBAL_SLOT = True
+BONUS_GLOBAL_SLOT_COUNT = 2
 
+# 지역 미달 허용
+ALLOW_REGION_UNDERFILL = True
+
+# 쿼리당 최대 기사 수
+MAX_ENTRIES_PER_KEYWORD = 8
+
+# =========================
+# HELPERS
+# =========================
 def google_news_rss_url(keyword: str) -> str:
     return f"https://news.google.com/rss/search?q={quote_plus(keyword)}&hl={HL}&gl={GL}&ceid={CEID}"
 
-
-def load_seen() -> set:
+def load_seen() -> dict:
     if os.path.exists(STATE_FILE):
         try:
             with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
         except Exception as e:
             print(f"[WARN] load_seen failed: {e}")
-    return set()
+    return {}
 
-
-def save_seen(seen_set: set):
+def save_seen(seen_map: dict):
     try:
         with open(STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(sorted(list(seen_set)), f, ensure_ascii=False, indent=2)
+            json.dump(seen_map, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print(f"[WARN] save_seen failed: {e}")
-
 
 def normalize_title(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", (text or "").lower())
     text = re.sub(r"[^\w\s가-힣]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
-
 def clean_html_text(text: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).strip()
 
-
-def format_date(date_str: str) -> str:
-    if not date_str:
-        return "Unknown"
-
-    patterns = [
-        "%a, %d %b %Y %H:%M:%S %Z",
-        "%a, %d %b %Y %H:%M:%S %z",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%d %H:%M:%S",
-    ]
-
-    for pattern in patterns:
-        try:
-            dt = datetime.strptime(date_str, pattern)
-            return dt.strftime("%d %b %Y (%a)")
-        except Exception:
-            pass
-
-    try:
-        dt = datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
-        return dt.strftime("%d %b %Y (%a)")
-    except Exception:
-        return date_str
-
+def format_date(dt: datetime) -> str:
+    return dt.astimezone(KST).strftime("%Y-%m-%d %H:%M KST")
 
 def is_quiet_time_kst() -> bool:
-    now = datetime.now(timezone(timedelta(hours=9))).hour
-    return now >= QUIET_HOUR_START or now < QUIET_HOUR_END
-
+    now_hour = datetime.now(KST).hour
+    return now_hour >= QUIET_HOUR_START or now_hour < QUIET_HOUR_END
 
 def get_source(entry):
     try:
@@ -266,129 +287,51 @@ def get_source(entry):
             return (entry.source.get("title") or "").strip()
     except Exception:
         pass
-
     title = entry.get("title", "") or ""
     return title.split(" - ")[-1].strip() if " - " in title else ""
 
+def source_tier(source: str) -> int:
+    s = (source or "").lower()
+    if any(x.lower() in s for x in TIER1_SOURCES):
+        return 1
+    if any(x.lower() in s for x in TIER2_SOURCES):
+        return 2
+    return 3
 
-def is_preferred_source(source: str) -> bool:
-    return any(x.lower() in (source or "").lower() for x in PREFERRED_SOURCES)
+def parse_entry_datetime(entry) -> datetime | None:
+    try:
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            return datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=UTC)
+    except Exception:
+        pass
+    try:
+        if hasattr(entry, "updated_parsed") and entry.updated_parsed:
+            return datetime.fromtimestamp(time.mktime(entry.updated_parsed), tz=UTC)
+    except Exception:
+        pass
+    return None
 
-
-def is_recent_entry(entry):
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
-        try:
-            dt = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
-            return datetime.now(timezone.utc) - dt <= timedelta(days=MAX_AGE_DAYS)
-        except Exception:
-            return True
-    return True
-
-
-def contains_major_sports_signal(text: str) -> bool:
-    return any(re.search(p, text, re.I) for p in MAJOR_SPORTS_PATTERNS)
-
-
-def is_valid_news(title, summary, keyword):
-    text = f"{title} {summary} {keyword}".lower()
-
-    related_keywords = [
-        "war", "conflict", "geopolitics", "sanction", "tariff", "economy", "inflation",
-        "rate", "central bank", "oil", "gas", "lng", "energy", "ai", "chip", "technology",
-        "supply chain", "shipping", "climate", "disaster", "health", "biotech", "art",
-        "museum", "architecture", "opera", "concert", "film", "sports", "wine", "coffee",
-        "전쟁", "분쟁", "지정학", "제재", "관세", "경제", "인플레이션", "금리", "중앙은행",
-        "원유", "가스", "엘엔지", "에너지", "반도체", "기술", "공급망", "해운", "기후", "재난",
-        "보건", "바이오", "미술", "박물관", "건축", "오페라", "공연", "영화제", "스포츠",
-        "와인", "커피",
-    ]
-
-    if not any(x in text for x in related_keywords):
+def is_today_kst(entry_dt: datetime | None) -> bool:
+    if not entry_dt:
         return False
+    return entry_dt.astimezone(KST).date() == datetime.now(KST).date()
 
-    if any(re.search(p, text, re.I) for p in BLOCK_PATTERNS):
-        if contains_major_sports_signal(text):
-            return True
-        return False
+def contains_any_pattern(text: str, patterns: list[str]) -> bool:
+    return any(re.search(p, text, re.I) for p in patterns)
 
-    return True
-
-
-def classify_category(item):
-    text = f"{item['title']} {item.get('summary', '')}".lower()
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bwar\b", r"\bconflict\b", r"\bsanctions?\b", r"\btariffs?\b",
-        r"\bmilitary\b", r"\bmissile\b", r"\bdiplomacy\b", r"\bsummit\b",
-        r"전쟁", r"분쟁", r"제재", r"관세", r"미사일", r"외교", r"정상회담"
-    ]):
-        return "geopolitics"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\binflation\b", r"\binterest rate\b", r"\bcentral bank\b", r"\brecession\b",
-        r"\beconomy\b", r"\bmarket\b", r"인플레이션", r"금리", r"중앙은행", r"침체", r"경제", r"시장"
-    ]):
-        return "economy"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\boil\b", r"\bgas\b", r"\blng\b", r"\benergy\b", r"\bopec\b",
-        r"원유", r"가스", r"엘엔지", r"LNG", r"에너지"
-    ]):
-        return "energy"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bai\b", r"\bsemiconductor\b", r"\bchip\b", r"\btechnology\b", r"\bbig tech\b",
-        r"AI", r"반도체", r"칩", r"기술"
-    ]):
-        return "tech"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bsupply chain\b", r"\bshipping\b", r"\blogistics\b", r"\bpanama canal\b", r"\bsuez\b",
-        r"공급망", r"해운", r"물류", r"파나마", r"수에즈"
-    ]):
-        return "supply_chain"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bclimate\b", r"\bdisaster\b", r"\bearthquake\b", r"\bflood\b", r"\bwildfire\b",
-        r"기후", r"재난", r"지진", r"홍수", r"산불"
-    ]):
-        return "climate"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bhealth\b", r"\bbiotech\b", r"\bpharmaceutical\b", r"\boutbreak\b", r"\bpandemic\b",
-        r"보건", r"바이오", r"제약", r"감염병", r"대유행"
-    ]):
-        return "health"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bart\b", r"\bmuseum\b", r"\barchitecture\b", r"\bopera\b", r"\bconcert\b",
-        r"\bfilm festival\b", r"\bolympics\b", r"\bworld cup\b",
-        r"미술", r"박물관", r"건축", r"오페라", r"공연", r"영화제", r"올림픽", r"월드컵", r"스포츠"
-    ]):
-        return "culture"
-
-    if any(re.search(p, text, re.I) for p in [
-        r"\bwine\b", r"\bcoffee\b", r"\bvineyard\b",
-        r"와인", r"커피", r"포도밭"
-    ]):
-        return "lifestyle"
-
-    return "other"
-
+def get_text_blob(title: str, summary: str, keyword: str = "") -> str:
+    return f"{title} {summary} {keyword}".strip().lower()
 
 def extract_topic_signature(title: str) -> str:
     text = normalize_title(title)
-
     stopwords = {
         "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with", "at",
-        "from", "by", "after", "over", "amid", "as", "is", "are",
+        "from", "by", "after", "over", "amid", "as", "is", "are", "will",
         "news", "global", "world", "international",
-        "세계", "국제", "글로벌", "주요", "뉴스", "관련", "대한"
+        "세계", "국제", "글로벌", "주요", "뉴스", "관련", "대한", "오늘",
     }
-
     tokens = [t for t in text.split() if len(t) > 2 and t not in stopwords]
     return " ".join(tokens[:6])
-
 
 def topic_overlap(sig1: str, sig2: str) -> bool:
     s1 = set(sig1.split())
@@ -399,228 +342,422 @@ def topic_overlap(sig1: str, sig2: str) -> bool:
     min_size = min(len(s1), len(s2))
     return intersection >= 2 and intersection / min_size >= 0.5
 
+def guess_region(title: str, summary: str, keyword: str) -> str | None:
+    text = get_text_blob(title, summary, keyword)
+    region_scores = {}
 
-def calculate_score(item, topic_counts):
+    for region, patterns in REGION_PATTERNS.items():
+        score = 0
+        for p in patterns:
+            if re.search(p, text, re.I):
+                score += 1
+        if score > 0:
+            region_scores[region] = score
+
+    if not region_scores:
+        return None
+
+    return sorted(region_scores.items(), key=lambda x: x[1], reverse=True)[0][0]
+
+def is_korea_heavy_news(title: str, summary: str) -> bool:
+    text = get_text_blob(title, summary)
+    if contains_any_pattern(text, KOREA_EXCEPTION_PATTERNS):
+        return False
+    return contains_any_pattern(text, KOREA_HEAVY_PATTERNS)
+
+def is_event_worthy(title: str, summary: str, keyword: str) -> bool:
+    text = get_text_blob(title, summary, keyword)
+
+    if contains_any_pattern(text, BLOCK_PATTERNS):
+        return False
+
+    # 이벤트 중심: high면 통과, medium만 있으면 소극적 허용
+    if contains_any_pattern(text, HIGH_PATTERNS):
+        return True
+
+    if contains_any_pattern(text, MEDIUM_PATTERNS):
+        # medium 기사라도 지역/국가 맥락이 분명할 때만
+        region = guess_region(title, summary, keyword)
+        return region is not None
+
+    return False
+
+def classify_category(item) -> str:
+    text = get_text_blob(item["title"], item.get("summary", ""))
+
+    if contains_any_pattern(text, [
+        r"\bwar\b", r"\bconflict\b", r"\bsanctions?\b", r"\btariffs?\b", r"\bmilitary\b",
+        r"\bmissile\b", r"\bdiplomacy\b", r"\bsummit\b",
+        r"전쟁", r"분쟁", r"제재", r"관세", r"미사일", r"외교", r"정상회담"
+    ]):
+        return "geopolitics"
+
+    if contains_any_pattern(text, [
+        r"\binflation\b", r"\binterest rate\b", r"\bcentral bank\b", r"\brecession\b",
+        r"\beconomy\b", r"\bmarket\b", r"인플레이션", r"금리", r"중앙은행", r"침체", r"경제", r"시장"
+    ]):
+        return "economy"
+
+    if contains_any_pattern(text, [
+        r"\boil\b", r"\bgas\b", r"\blng\b", r"\benergy\b", r"\bopec\b",
+        r"원유", r"가스", r"\bLNG\b", r"에너지"
+    ]):
+        return "energy"
+
+    if contains_any_pattern(text, [
+        r"\bai\b", r"\bsemiconductor\b", r"\bchip\b", r"\btechnology\b",
+        r"AI", r"반도체", r"칩", r"기술"
+    ]):
+        return "tech"
+
+    return "other"
+
+def calculate_score(item, selected_signatures=None):
     title = item["title"]
     summary = item.get("summary", "")
     source = item["source"]
-    text = f"{title} {summary}".lower()
-    category = item["category"]
-
+    text = get_text_blob(title, summary)
     score = 0
 
-    if any(re.search(p, text, re.I) for p in HIGH_PATTERNS):
-        score += 5
-    elif any(re.search(p, text, re.I) for p in MEDIUM_PATTERNS):
-        score += 2
-
-    if is_preferred_source(source):
+    # 중요 이벤트
+    if contains_any_pattern(text, HIGH_PATTERNS):
+        score += 8
+    elif contains_any_pattern(text, MEDIUM_PATTERNS):
         score += 3
 
-    impact_patterns = [
-        r"\bglobal\b", r"\bworld\b", r"\binternational\b", r"\bmajor\b",
-        r"\bcentral bank\b", r"\bsupply chain\b", r"\benergy crisis\b",
-        r"글로벌", r"세계", r"국제", r"중앙은행", r"공급망", r"에너지 위기"
-    ]
-    if any(re.search(p, text, re.I) for p in impact_patterns):
+    # 출처
+    tier = source_tier(source)
+    if tier == 1:
+        score += 4
+    elif tier == 2:
         score += 2
 
-    if category == "culture":
-        score += 1
+    # 한국 중심 기사 감점
+    if is_korea_heavy_news(title, summary):
+        score -= 6
 
-    topic_signature = item["topic_signature"]
-    if topic_counts.get(topic_signature, 0) >= 1:
+    # 저품질 감점
+    if contains_any_pattern(text, LOW_QUALITY_PATTERNS):
         score -= 3
 
-    low_quality_patterns = [
-        r"\bopinion\b", r"\beditorial\b", r"\bcolumn\b", r"\bslideshow\b",
-        r"사설", r"칼럼", r"포토", r"화보"
-    ]
-    if any(re.search(p, text, re.I) for p in low_quality_patterns):
-        score -= 2
+    # 글로벌 영향 키워드
+    if contains_any_pattern(text, [
+        r"\bglobal\b", r"\bworld\b", r"\binternational\b", r"\bmajor\b",
+        r"\bcentral bank\b", r"\bsupply chain\b", r"\benergy crisis\b",
+        r"글로벌", r"세계", r"국제", r"중앙은행", r"공급망", r"에너지 위기",
+    ]):
+        score += 2
+
+    # 지역성이 분명하면 가점
+    if item.get("region"):
+        score += 2
+
+    # 같은 사건 반복 감점
+    if selected_signatures:
+        for sig in selected_signatures:
+            if topic_overlap(item["topic_signature"], sig):
+                score -= 5
+                break
 
     return score
 
+def prune_seen_today_only(seen_map: dict) -> dict:
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
+    return {k: v for k, v in seen_map.items() if v == today_str}
 
+def build_uid(link: str, title: str) -> str:
+    return f"{link}|{normalize_title(title)}"
+
+def short_summary(text: str, max_len: int = 110) -> str:
+    text = clean_html_text(text)
+    if not text:
+        return ""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "..."
+
+# =========================
+# FETCH
+# =========================
 def fetch_news():
     items = []
 
-    for kw in KEYWORDS:
-        try:
-            print(f"[INFO] Fetching: {kw}")
-            feed = feedparser.parse(google_news_rss_url(kw))
+    for region, keywords in REGION_KEYWORDS.items():
+        for kw in keywords:
+            try:
+                print(f"[INFO] Fetching [{region}] {kw}")
+                feed = feedparser.parse(google_news_rss_url(kw))
 
-            for entry in feed.entries[:MAX_ENTRIES_PER_KEYWORD]:
-                title = (entry.get("title") or "").strip()
-                link = (entry.get("link") or "").strip()
-                summary = clean_html_text(entry.get("summary", ""))
-                source = get_source(entry)
-                published_raw = (entry.get("published") or entry.get("updated") or "").strip()
+                for entry in feed.entries[:MAX_ENTRIES_PER_KEYWORD]:
+                    title = (entry.get("title") or "").strip()
+                    link = (entry.get("link") or "").strip()
+                    summary = clean_html_text(entry.get("summary", ""))
+                    source = get_source(entry)
+                    entry_dt = parse_entry_datetime(entry)
 
-                if not title or not link:
-                    continue
-                if not is_recent_entry(entry):
-                    continue
-                if not is_valid_news(title, summary, kw):
-                    continue
+                    if not title or not link:
+                        continue
+                    if not entry_dt:
+                        continue
+                    if not is_today_kst(entry_dt):
+                        continue
+                    if not is_event_worthy(title, summary, kw):
+                        continue
 
-                item = {
-                    "uid": f"{link}|{normalize_title(title)}",
-                    "title": title,
-                    "title_norm": normalize_title(title),
-                    "link": link,
-                    "summary": summary,
-                    "source": source,
-                    "keyword": kw,
-                    "published": format_date(published_raw),
-                }
-                item["category"] = classify_category(item)
-                item["topic_signature"] = extract_topic_signature(title)
+                    guessed_region = guess_region(title, summary, kw)
 
-                items.append(item)
+                    # 검색 region과 실제 region이 너무 다르면 제외
+                    # 단, 쿼리상 region을 전혀 못 잡은 경우는 query region 사용
+                    final_region = guessed_region or region
+                    if guessed_region and guessed_region != region:
+                        # 미국 쿼리에서 중국 기사가 잡히는 식의 오염 방지
+                        continue
 
-            time.sleep(1)
+                    item = {
+                        "uid": build_uid(link, title),
+                        "title": title,
+                        "title_norm": normalize_title(title),
+                        "link": link,
+                        "summary": summary,
+                        "source": source,
+                        "keyword": kw,
+                        "published_dt": entry_dt,
+                        "published": format_date(entry_dt),
+                        "region": final_region,
+                    }
+                    item["category"] = classify_category(item)
+                    item["topic_signature"] = extract_topic_signature(title)
+                    items.append(item)
 
-        except Exception as e:
-            print(f"[WARN] Fetch failed for keyword [{kw}]: {e}")
+                time.sleep(1)
+
+            except Exception as e:
+                print(f"[WARN] Fetch failed for [{region}] {kw}: {e}")
 
     return items
 
-
-def deduplicate_initial(items, seen):
+# =========================
+# FILTER / DEDUPE
+# =========================
+def deduplicate_initial(items, seen_map):
     result = []
     local_uids = set()
     local_titles = set()
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
 
     for item in items:
-        if item["uid"] in seen:
+        uid = item["uid"]
+
+        if seen_map.get(uid) == today_str:
             continue
-        if item["uid"] in local_uids:
+        if uid in local_uids:
             continue
         if item["title_norm"] in local_titles:
             continue
 
-        local_uids.add(item["uid"])
+        local_uids.add(uid)
         local_titles.add(item["title_norm"])
         result.append(item)
 
     return result
 
-
-def select_top_diverse_items(items):
-    topic_counts = {}
-    for item in items:
-        item["score"] = calculate_score(item, topic_counts)
-        topic_counts[item["topic_signature"]] = topic_counts.get(item["topic_signature"], 0) + 1
-
-    items.sort(
-        key=lambda x: (
-            x["score"],
-            1 if is_preferred_source(x["source"]) else 0,
-        ),
-        reverse=True
-    )
-
+def deduplicate_by_topic(items):
     final = []
-    category_counts = {}
     selected_signatures = []
 
+    # 일단 고득점순 정렬
     for item in items:
-        category = item["category"]
-        allowed = MAX_PER_CATEGORY.get(category, 1)
+        item["score"] = calculate_score(item, selected_signatures=None)
 
-        if category_counts.get(category, 0) >= allowed:
-            continue
+    items = sorted(
+        items,
+        key=lambda x: (
+            x["score"],
+            -source_tier(x["source"]),
+            x["published_dt"],
+        ),
+        reverse=True,
+    )
 
+    for item in items:
         too_similar = False
         for sig in selected_signatures:
             if topic_overlap(item["topic_signature"], sig):
                 too_similar = True
                 break
+
         if too_similar:
             continue
 
         final.append(item)
-        category_counts[category] = category_counts.get(category, 0) + 1
         selected_signatures.append(item["topic_signature"])
 
-        if len(final) >= MAX_ITEMS_PER_RUN:
-            break
+    return final
 
-    if len(final) < MAX_ITEMS_PER_RUN:
-        selected_uids = {x["uid"] for x in final}
-        for item in items:
-            if item["uid"] in selected_uids:
-                continue
-            final.append(item)
-            selected_uids.add(item["uid"])
-            if len(final) >= MAX_ITEMS_PER_RUN:
+# =========================
+# SELECTION
+# =========================
+def pick_region_items(items):
+    region_selected = {region: [] for region in REGION_QUOTA.keys()}
+    region_candidates = {region: [] for region in REGION_QUOTA.keys()}
+
+    # 지역별 분배
+    for item in items:
+        region = item.get("region")
+        if region in region_candidates:
+            region_candidates[region].append(item)
+
+    # 지역별 정렬
+    for region, candidates in region_candidates.items():
+        selected_signatures = []
+        for item in candidates:
+            item["score"] = calculate_score(item, selected_signatures)
+        candidates.sort(
+            key=lambda x: (
+                x["score"],
+                -source_tier(x["source"]),
+                x["published_dt"],
+            ),
+            reverse=True,
+        )
+
+        picked = []
+        for item in candidates:
+            if len(picked) >= REGION_QUOTA[region]:
                 break
 
-    return final[:MAX_ITEMS_PER_RUN]
+            # 같은 지역 내 같은 사건 중복 방지
+            if any(topic_overlap(item["topic_signature"], p["topic_signature"]) for p in picked):
+                continue
 
+            # 너무 한국 영향 해설 중심이면 제외
+            if is_korea_heavy_news(item["title"], item["summary"]):
+                continue
+
+            picked.append(item)
+
+        region_selected[region] = picked
+
+    return region_selected
+
+def fill_global_extras(items, region_selected):
+    already_uids = set()
+    selected_signatures = []
+
+    for picks in region_selected.values():
+        for item in picks:
+            already_uids.add(item["uid"])
+            selected_signatures.append(item["topic_signature"])
+
+    leftovers = []
+    for item in items:
+        if item["uid"] in already_uids:
+            continue
+        item["score"] = calculate_score(item, selected_signatures)
+        leftovers.append(item)
+
+    leftovers.sort(
+        key=lambda x: (
+            x["score"],
+            -source_tier(x["source"]),
+            x["published_dt"],
+        ),
+        reverse=True,
+    )
+
+    extras = []
+    for item in leftovers:
+        if len(extras) >= BONUS_GLOBAL_SLOT_COUNT:
+            break
+
+        if any(topic_overlap(item["topic_signature"], s) for s in [e["topic_signature"] for e in extras]):
+            continue
+        if any(topic_overlap(item["topic_signature"], s) for s in selected_signatures):
+            continue
+        if is_korea_heavy_news(item["title"], item["summary"]):
+            continue
+
+        extras.append(item)
+
+    return extras
 
 def attach_importance_label(items):
     for item in items:
-        if item["score"] >= 8:
+        if item["score"] >= 10:
             item["importance"] = "🔴 HIGH"
-        elif item["score"] >= 4:
+        elif item["score"] >= 5:
             item["importance"] = "🟠 MEDIUM"
         else:
             item["importance"] = "🟢 LOW"
     return items
 
-
+# =========================
+# FORMAT
+# =========================
 def format_single_item(item):
-    return "\n".join([
+    lines = [
         item["importance"],
-        html.escape(item["published"] or "Unknown"),
+        item["published"],
         f'<a href="{item["link"]}">{html.escape(item["title"])}</a>',
         f"Source: {html.escape(item['source'] or 'Unknown')}",
-        f"Keyword: {html.escape(item['keyword'])}",
-    ])
+    ]
 
+    one_line = short_summary(item.get("summary", ""))
+    if one_line:
+        lines.append(f"Summary: {html.escape(one_line)}")
 
-def chunk_messages(items):
-    temp_chunks = []
-    current_parts = []
-    current_length = 0
+    return "\n".join(lines)
 
-    for item in items:
-        item_text = format_single_item(item)
+def flatten_grouped_items(region_selected, extras):
+    ordered = []
+    region_order = [
+        "us", "china", "japan", "india", "singapore",
+        "sea_other", "europe", "middle_east", "latam", "africa"
+    ]
 
-        if current_parts:
-            add_len = len("\n\n") + len(item_text)
-        else:
-            add_len = len("📰 세계 주요뉴스 Digest\n\n") + len(item_text)
+    for region in region_order:
+        items = region_selected.get(region, [])
+        if not items and ALLOW_REGION_UNDERFILL:
+            continue
+        if items:
+            ordered.append(("header", REGION_LABELS[region]))
+            for item in items:
+                ordered.append(("item", item))
 
-        if current_parts and current_length + add_len > MAX_TELEGRAM_MESSAGE_LENGTH:
-            temp_chunks.append(current_parts)
-            current_parts = [item_text]
-            current_length = len("📰 세계 주요뉴스 Digest\n\n") + len(item_text)
-        else:
-            current_parts.append(item_text)
-            if len(current_parts) == 1:
-                current_length = len("📰 세계 주요뉴스 Digest\n\n") + len(item_text)
-            else:
-                current_length += len("\n\n") + len(item_text)
+    if extras:
+        ordered.append(("header", REGION_LABELS["global_extra"]))
+        for item in extras:
+            ordered.append(("item", item))
 
-    if current_parts:
-        temp_chunks.append(current_parts)
+    return ordered
 
+def chunk_messages(grouped_entries):
     messages = []
+    current = "📰 세계 지역별 주요뉴스 Digest (당일 기사만)\n\n"
 
-    if len(temp_chunks) == 1:
-        body = "\n\n".join(temp_chunks[0])
-        messages.append("📰 세계 주요뉴스 Digest\n\n" + body)
-    else:
-        for idx, chunk in enumerate(temp_chunks, start=1):
-            body = "\n\n".join(chunk)
-            messages.append(f"📰 세계 주요뉴스 Digest (Part {idx})\n\n" + body)
+    for entry_type, payload in grouped_entries:
+        if entry_type == "header":
+            block = f"{payload}\n"
+        else:
+            block = format_single_item(payload) + "\n"
+
+        # 헤더/아이템 사이 공백
+        block = block + "\n"
+
+        if len(current) + len(block) > MAX_TELEGRAM_MESSAGE_LENGTH:
+            messages.append(current.rstrip())
+            current = "📰 세계 지역별 주요뉴스 Digest (당일 기사만)\n\n" + block
+        else:
+            current += block
+
+    if current.strip():
+        messages.append(current.rstrip())
 
     return messages
 
-
+# =========================
+# TELEGRAM
+# =========================
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
@@ -659,7 +796,9 @@ def send_telegram(text):
 
     return False
 
-
+# =========================
+# MAIN
+# =========================
 def main():
     print("=== START ===")
 
@@ -667,25 +806,53 @@ def main():
         print("[INFO] Quiet hours in KST. Skip sending.")
         return
 
-    seen = load_seen()
-    new_seen = set(seen)
+    seen_map = prune_seen_today_only(load_seen())
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
 
     raw_items = fetch_news()
     print(f"[INFO] Raw items: {len(raw_items)}")
 
-    deduped_items = deduplicate_initial(raw_items, seen)
-    print(f"[INFO] Deduped items: {len(deduped_items)}")
+    deduped_items = deduplicate_initial(raw_items, seen_map)
+    print(f"[INFO] Deduped initial items: {len(deduped_items)}")
 
-    final_items = select_top_diverse_items(deduped_items)
-    final_items = attach_importance_label(final_items)
-    print(f"[INFO] Final selected items: {len(final_items)}")
+    deduped_items = deduplicate_by_topic(deduped_items)
+    print(f"[INFO] Deduped by topic items: {len(deduped_items)}")
+
+    region_selected = pick_region_items(deduped_items)
+
+    total_region_count = sum(len(v) for v in region_selected.values())
+    print(f"[INFO] Region selected count: {total_region_count}")
+
+    extras = []
+    if ALLOW_BONUS_GLOBAL_SLOT:
+        extras = fill_global_extras(deduped_items, region_selected)
+    print(f"[INFO] Extra selected count: {len(extras)}")
+
+    final_items = []
+    for region, items in region_selected.items():
+        final_items.extend(items)
+    final_items.extend(extras)
 
     if not final_items:
-        print("[INFO] No new world news found.")
-        save_seen(new_seen)
+        print("[INFO] No valid world news found for today.")
+        save_seen(seen_map)
         return
 
-    messages = chunk_messages(final_items)
+    # score / importance 정리
+    selected_signatures = []
+    for item in final_items:
+        item["score"] = calculate_score(item, selected_signatures)
+        selected_signatures.append(item["topic_signature"])
+    final_items = attach_importance_label(final_items)
+
+    # region_selected / extras에 score 반영된 객체 다시 반영
+    final_uid_map = {x["uid"]: x for x in final_items}
+    for region in list(region_selected.keys()):
+        region_selected[region] = [final_uid_map[x["uid"]] for x in region_selected[region] if x["uid"] in final_uid_map]
+    extras = [final_uid_map[x["uid"]] for x in extras if x["uid"] in final_uid_map]
+
+    grouped_entries = flatten_grouped_items(region_selected, extras)
+    messages = chunk_messages(grouped_entries)
     print(f"[INFO] Message chunks: {len(messages)}")
 
     all_sent = True
@@ -697,11 +864,10 @@ def main():
 
     if all_sent:
         for item in final_items:
-            new_seen.add(item["uid"])
+            seen_map[item["uid"]] = today_str
 
-    save_seen(new_seen)
+    save_seen(seen_map)
     print(f"[INFO] Done. Sent {len(final_items) if all_sent else 0} items in {len(messages) if all_sent else 0} message(s).")
-
 
 if __name__ == "__main__":
     main()
