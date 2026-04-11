@@ -1,4 +1,4 @@
-# 지역별 quota 기반으로 최근 2일 한국어 세계 주요뉴스를 수집·선별해
+# 지역별 quota 기반으로 당일 한국어 세계 주요뉴스를 수집·선별해
 # 텔레그램으로 보내는 뉴스 다이제스트 봇
 
 import feedparser
@@ -38,9 +38,6 @@ MAX_RETRY = 5
 REQUEST_TIMEOUT = 20
 MAX_TELEGRAM_MESSAGE_LENGTH = 3800
 
-# 최근 며칠 기사까지 허용할지
-LOOKBACK_DAYS = 2
-
 # 테스트용 디버그 모드
 # True면 이벤트 필터를 느슨하게 적용
 DEBUG_RELAX_MODE = True
@@ -60,7 +57,6 @@ REGION_QUOTA = {
 }
 
 # 지역별 검색 키워드
-# 기존처럼 "정치 경제 외교" 묶음 대신 짧고 실제 기사형 키워드로 분해
 REGION_KEYWORDS = {
     "us": [
         "미국",
@@ -336,12 +332,10 @@ def parse_entry_datetime(entry):
         pass
     return None
 
-def is_within_lookback_kst(entry_dt):
+def is_today_kst(entry_dt):
     if not entry_dt:
         return False
-    now_kst = datetime.now(KST)
-    entry_kst = entry_dt.astimezone(KST)
-    return now_kst - entry_kst <= timedelta(days=LOOKBACK_DAYS)
+    return entry_dt.astimezone(KST).date() == datetime.now(KST).date()
 
 def contains_any_pattern(text: str, patterns) -> bool:
     return any(re.search(p, text, re.I) for p in patterns)
@@ -422,7 +416,6 @@ def calculate_score(item, selected_signatures=None):
     elif tier == 2:
         score += 2
 
-    # 한국 해설형은 약한 감점만
     if is_korea_heavy_news(title, summary):
         score -= 2
 
@@ -436,7 +429,6 @@ def calculate_score(item, selected_signatures=None):
     ]):
         score += 2
 
-    # 지역 추정은 버리는 조건이 아니라 가점용
     guessed = item.get("guessed_region")
     region = item.get("region")
     if guessed and guessed == region:
@@ -464,17 +456,8 @@ def short_summary(text: str, max_len: int = 110) -> str:
     return text[:max_len].rstrip() + "..."
 
 def prune_seen_today_only(seen_map: dict) -> dict:
-    cutoff = datetime.now(KST) - timedelta(days=LOOKBACK_DAYS)
-    kept = {}
-    for k, v in seen_map.items():
-        try:
-            dt = datetime.strptime(v, "%Y-%m-%d")
-            dt = datetime(dt.year, dt.month, dt.day, tzinfo=KST)
-            if dt >= cutoff:
-                kept[k] = v
-        except Exception:
-            pass
-    return kept
+    today_str = datetime.now(KST).strftime("%Y-%m-%d")
+    return {k: v for k, v in seen_map.items() if v == today_str}
 
 def fetch_news():
     items = []
@@ -496,7 +479,7 @@ def fetch_news():
                         continue
                     if not entry_dt:
                         continue
-                    if not is_within_lookback_kst(entry_dt):
+                    if not is_today_kst(entry_dt):
                         continue
 
                     if not DEBUG_RELAX_MODE and not is_event_worthy(title, summary, kw):
@@ -670,7 +653,7 @@ def flatten_grouped_items(region_selected, extras):
 
 def chunk_messages(grouped_entries):
     messages = []
-    current = f"📰 세계 지역별 주요뉴스 Digest (최근 {LOOKBACK_DAYS}일)\n\n"
+    current = "📰 세계 지역별 주요뉴스 Digest (당일 기사만)\n\n"
 
     for entry_type, payload in grouped_entries:
         if entry_type == "header":
@@ -682,7 +665,7 @@ def chunk_messages(grouped_entries):
 
         if len(current) + len(block) > MAX_TELEGRAM_MESSAGE_LENGTH:
             messages.append(current.rstrip())
-            current = f"📰 세계 지역별 주요뉴스 Digest (최근 {LOOKBACK_DAYS}일)\n\n" + block
+            current = "📰 세계 지역별 주요뉴스 Digest (당일 기사만)\n\n" + block
         else:
             current += block
 
