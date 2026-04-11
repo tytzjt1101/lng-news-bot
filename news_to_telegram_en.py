@@ -42,7 +42,7 @@ MAX_TELEGRAM_MESSAGE_LENGTH = 3800
 LOOKBACK_DAYS = 2
 
 # 테스트용 디버그 모드
-# True면 이벤트 필터를 느슨하게 적용해서 기사 확보를 우선
+# True면 이벤트 필터를 느슨하게 적용
 DEBUG_RELAX_MODE = True
 
 # 지역별 목표 기사 수
@@ -59,56 +59,90 @@ REGION_QUOTA = {
     "africa": 1,
 }
 
-# 지역별 내부 검색 키워드
+# 지역별 검색 키워드
+# 기존처럼 "정치 경제 외교" 묶음 대신 짧고 실제 기사형 키워드로 분해
 REGION_KEYWORDS = {
     "us": [
-        "미국 정치 경제 외교",
-        "미국 연준 금리 관세",
-        "미국 빅테크 AI 반도체",
-        "미국 무역 정책 제조업",
+        "미국",
+        "트럼프",
+        "연준",
+        "백악관",
+        "미국 관세",
+        "미국 금리",
+        "미국 고용",
+        "엔비디아 미국",
     ],
     "china": [
-        "중국 경제 부동산 산업정책",
-        "중국 외교 미중갈등 반도체",
-        "중국 경기부양 수출 내수",
+        "중국",
+        "시진핑",
+        "중국 경기",
+        "중국 부동산",
+        "중국 수출",
+        "중국 경기부양",
+        "미중 관세",
     ],
     "japan": [
-        "일본 경제 엔화 반도체 정책",
-        "일본 정치 외교 방위",
+        "일본",
+        "일본은행",
+        "엔화",
+        "일본 반도체",
+        "일본 방위",
     ],
     "india": [
-        "인도 경제 제조업 인프라",
-        "인도 외교 정책 산업",
+        "인도",
+        "모디",
+        "인도 제조업",
+        "인도 경제",
+        "인도 인프라",
     ],
     "singapore": [
-        "싱가포르 경제 금융 정책",
-        "싱가포르 항만 물류 에너지",
-        "싱가포르 반도체 산업 투자",
+        "싱가포르",
+        "싱가포르 금융",
+        "싱가포르 항만",
+        "싱가포르 에너지",
+        "싱가포르 반도체",
     ],
     "sea_other": [
-        "인도네시아 베트남 태국 말레이시아 필리핀 경제 정치",
-        "동남아 공급망 제조업 외교",
-        "인도네시아 베트남 에너지 인프라",
+        "인도네시아",
+        "베트남",
+        "태국",
+        "말레이시아",
+        "필리핀",
+        "동남아",
     ],
     "europe": [
-        "유럽 경기 산업 규제",
-        "EU 독일 프랑스 영국 정책",
-        "유럽 중앙은행 방산 에너지",
+        "유럽",
+        "EU",
+        "독일",
+        "프랑스",
+        "영국",
+        "ECB",
+        "유럽 경기",
     ],
     "middle_east": [
-        "중동 이란 사우디 이스라엘 에너지",
-        "호르무즈 석유 LNG 외교",
-        "중동 전쟁 휴전 제재",
+        "중동",
+        "이란",
+        "사우디",
+        "이스라엘",
+        "카타르",
+        "호르무즈",
+        "가자",
     ],
     "latam": [
-        "브라질 멕시코 아르헨티나 정치 경제",
-        "중남미 자원 통화 대선",
-        "브라질 멕시코 산업 무역",
+        "브라질",
+        "멕시코",
+        "아르헨티나",
+        "칠레",
+        "페루",
+        "중남미",
     ],
     "africa": [
-        "아프리카 쿠데타 광물 인프라 에너지",
-        "나이지리아 남아공 이집트 에티오피아 경제",
-        "아프리카 항만 자원 중국 투자",
+        "아프리카",
+        "나이지리아",
+        "남아공",
+        "이집트",
+        "에티오피아",
+        "케냐",
     ],
 }
 
@@ -126,7 +160,6 @@ REGION_LABELS = {
     "global_extra": "🌐 글로벌 추가 주요뉴스",
 }
 
-# 지역별 대표 국가/단어 매칭
 REGION_PATTERNS = {
     "us": [
         r"\b미국\b", r"\b워싱턴\b", r"\b연준\b", r"\b백악관\b", r"\b트럼프\b", r"\b바이든\b",
@@ -153,6 +186,7 @@ REGION_PATTERNS = {
         r"\b자카르타\b", r"\b하노이\b", r"\b방콕\b", r"\b쿠알라룸푸르\b", r"\b마닐라\b",
         r"\bindonesia\b", r"\bvietnam\b", r"\bthailand\b", r"\bmalaysia\b", r"\bphilippines\b",
         r"\bjakarta\b", r"\bhanoi\b", r"\bbangkok\b", r"\bkuala lumpur\b", r"\bmanila\b",
+        r"\b동남아\b", r"\basean\b",
     ],
     "europe": [
         r"\b유럽\b", r"\beu\b", r"\beurope\b", r"\b유럽연합\b",
@@ -176,21 +210,12 @@ REGION_PATTERNS = {
     ],
 }
 
-# 한국 중심 기사 감점/제외용
+# 한국 관련 해설형 기사 감점
 KOREA_HEAVY_PATTERNS = [
-    r"\b한국\b", r"\b국내\b", r"\b우리나라\b", r"\b원화\b", r"\b코스피\b",
-    r"\b삼성\b", r"\b현대\b", r"\bsk\b", r"\blg\b", r"\b한국은행\b",
-    r"\bkorea\b", r"\bsouth korea\b", r"\bkospi\b",
     r"한국에 미치는", r"국내 영향", r"한국 증시", r"한국 수출", r"국내 업계",
+    r"코스피", r"원화", r"삼성전자", r"현대차", r"국내 투자자",
 ]
 
-# 예외적으로 허용할 수 있는 국제 사건
-KOREA_EXCEPTION_PATTERNS = [
-    r"\b한미\b", r"\b한중\b", r"\b한일\b", r"\b정상회담\b", r"\b외교\b",
-    r"\bkorea-us\b", r"\bkorea china\b", r"\bkorea japan\b",
-]
-
-# 중요 이벤트
 HIGH_PATTERNS = [
     r"\bwar\b", r"\bconflict\b", r"\battack\b", r"\bmissile\b", r"\bstrike\b",
     r"\bceasefire\b", r"\bsanctions?\b", r"\bcoup\b", r"\btariffs?\b",
@@ -226,7 +251,6 @@ BLOCK_PATTERNS = [
     r"패션", r"메이크업", r"연애", r"여행 팁",
 ]
 
-# 출처 우선순위
 TIER1_SOURCES = [
     "Reuters", "로이터",
     "Bloomberg", "블룸버그",
@@ -235,24 +259,17 @@ TIER1_SOURCES = [
     "Financial Times", "FT",
     "BBC", "AP", "Associated Press",
 ]
+
 TIER2_SOURCES = [
     "한국경제", "매일경제", "조선비즈", "서울경제", "이데일리",
     "머니투데이", "아시아경제", "중앙일보", "동아일보", "한겨레",
 ]
 
-# 초대형 사건 보너스 슬롯
 ALLOW_BONUS_GLOBAL_SLOT = True
 BONUS_GLOBAL_SLOT_COUNT = 2
-
-# 지역 미달 허용
 ALLOW_REGION_UNDERFILL = True
+MAX_ENTRIES_PER_KEYWORD = 10
 
-# 쿼리당 최대 기사 수
-MAX_ENTRIES_PER_KEYWORD = 8
-
-# =========================
-# HELPERS
-# =========================
 def google_news_rss_url(keyword: str) -> str:
     return f"https://news.google.com/rss/search?q={quote_plus(keyword)}&hl={HL}&gl={GL}&ceid={CEID}"
 
@@ -322,10 +339,8 @@ def parse_entry_datetime(entry):
 def is_within_lookback_kst(entry_dt):
     if not entry_dt:
         return False
-
     now_kst = datetime.now(KST)
     entry_kst = entry_dt.astimezone(KST)
-
     return now_kst - entry_kst <= timedelta(days=LOOKBACK_DAYS)
 
 def contains_any_pattern(text: str, patterns) -> bool:
@@ -373,8 +388,6 @@ def guess_region(title: str, summary: str, keyword: str):
 
 def is_korea_heavy_news(title: str, summary: str) -> bool:
     text = get_text_blob(title, summary)
-    if contains_any_pattern(text, KOREA_EXCEPTION_PATTERNS):
-        return False
     return contains_any_pattern(text, KOREA_HEAVY_PATTERNS)
 
 def is_event_worthy(title: str, summary: str, keyword: str) -> bool:
@@ -387,8 +400,7 @@ def is_event_worthy(title: str, summary: str, keyword: str) -> bool:
         return True
 
     if contains_any_pattern(text, MEDIUM_PATTERNS):
-        region = guess_region(title, summary, keyword)
-        return region is not None
+        return True
 
     return False
 
@@ -410,8 +422,9 @@ def calculate_score(item, selected_signatures=None):
     elif tier == 2:
         score += 2
 
+    # 한국 해설형은 약한 감점만
     if is_korea_heavy_news(title, summary):
-        score -= 6
+        score -= 2
 
     if contains_any_pattern(text, LOW_QUALITY_PATTERNS):
         score -= 3
@@ -423,8 +436,13 @@ def calculate_score(item, selected_signatures=None):
     ]):
         score += 2
 
-    if item.get("region"):
-        score += 2
+    # 지역 추정은 버리는 조건이 아니라 가점용
+    guessed = item.get("guessed_region")
+    region = item.get("region")
+    if guessed and guessed == region:
+        score += 3
+    elif guessed:
+        score += 1
 
     if selected_signatures:
         for sig in selected_signatures:
@@ -458,9 +476,6 @@ def prune_seen_today_only(seen_map: dict) -> dict:
             pass
     return kept
 
-# =========================
-# FETCH
-# =========================
 def fetch_news():
     items = []
 
@@ -484,15 +499,10 @@ def fetch_news():
                     if not is_within_lookback_kst(entry_dt):
                         continue
 
-                    if not DEBUG_RELAX_MODE:
-                        if not is_event_worthy(title, summary, kw):
-                            continue
+                    if not DEBUG_RELAX_MODE and not is_event_worthy(title, summary, kw):
+                        continue
 
                     guessed_region = guess_region(title, summary, kw)
-                    final_region = guessed_region or region
-
-                    if guessed_region and guessed_region != region:
-                        continue
 
                     item = {
                         "uid": build_uid(link, title),
@@ -504,7 +514,8 @@ def fetch_news():
                         "keyword": kw,
                         "published_dt": entry_dt,
                         "published": format_date(entry_dt),
-                        "region": final_region,
+                        "region": region,
+                        "guessed_region": guessed_region,
                     }
                     item["topic_signature"] = extract_topic_signature(title)
                     items.append(item)
@@ -516,9 +527,6 @@ def fetch_news():
 
     return items
 
-# =========================
-# FILTER / DEDUPE
-# =========================
 def deduplicate_initial(items, seen_map):
     result = []
     local_uids = set()
@@ -540,41 +548,6 @@ def deduplicate_initial(items, seen_map):
 
     return result
 
-def deduplicate_by_topic(items):
-    final = []
-    selected_signatures = []
-
-    for item in items:
-        item["score"] = calculate_score(item)
-
-    items = sorted(
-        items,
-        key=lambda x: (
-            x["score"],
-            -source_tier(x["source"]),
-            x["published_dt"],
-        ),
-        reverse=True,
-    )
-
-    for item in items:
-        too_similar = False
-        for sig in selected_signatures:
-            if topic_overlap(item["topic_signature"], sig):
-                too_similar = True
-                break
-
-        if too_similar:
-            continue
-
-        final.append(item)
-        selected_signatures.append(item["topic_signature"])
-
-    return final
-
-# =========================
-# SELECTION
-# =========================
 def pick_region_items(items):
     region_selected = {region: [] for region in REGION_QUOTA.keys()}
     region_candidates = {region: [] for region in REGION_QUOTA.keys()}
@@ -585,11 +558,12 @@ def pick_region_items(items):
             region_candidates[region].append(item)
 
     for region, candidates in region_candidates.items():
-        selected_signatures = []
-        for item in candidates:
-            item["score"] = calculate_score(item, selected_signatures)
+        local_candidates = candidates[:]
 
-        candidates.sort(
+        for item in local_candidates:
+            item["score"] = calculate_score(item)
+
+        local_candidates.sort(
             key=lambda x: (
                 x["score"],
                 -source_tier(x["source"]),
@@ -599,14 +573,11 @@ def pick_region_items(items):
         )
 
         picked = []
-        for item in candidates:
+        for item in local_candidates:
             if len(picked) >= REGION_QUOTA[region]:
                 break
 
             if any(topic_overlap(item["topic_signature"], p["topic_signature"]) for p in picked):
-                continue
-
-            if is_korea_heavy_news(item["title"], item["summary"]):
                 continue
 
             picked.append(item)
@@ -644,11 +615,7 @@ def fill_global_extras(items, region_selected):
     for item in leftovers:
         if len(extras) >= BONUS_GLOBAL_SLOT_COUNT:
             break
-        if any(topic_overlap(item["topic_signature"], s) for s in [e["topic_signature"] for e in extras]):
-            continue
-        if any(topic_overlap(item["topic_signature"], s) for s in selected_signatures):
-            continue
-        if is_korea_heavy_news(item["title"], item["summary"]):
+        if any(topic_overlap(item["topic_signature"], e["topic_signature"]) for e in extras):
             continue
         extras.append(item)
 
@@ -664,9 +631,6 @@ def attach_importance_label(items):
             item["importance"] = "🟢 LOW"
     return items
 
-# =========================
-# FORMAT
-# =========================
 def format_single_item(item):
     lines = [
         item["importance"],
@@ -727,9 +691,6 @@ def chunk_messages(grouped_entries):
 
     return messages
 
-# =========================
-# TELEGRAM
-# =========================
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
@@ -768,9 +729,6 @@ def send_telegram(text):
 
     return False
 
-# =========================
-# MAIN
-# =========================
 def main():
     print("=== START ===")
 
@@ -786,9 +744,6 @@ def main():
 
     deduped_items = deduplicate_initial(raw_items, seen_map)
     print(f"[INFO] Deduped initial items: {len(deduped_items)}")
-
-    deduped_items = deduplicate_by_topic(deduped_items)
-    print(f"[INFO] Deduped by topic items: {len(deduped_items)}")
 
     region_selected = pick_region_items(deduped_items)
     total_region_count = sum(len(v) for v in region_selected.values())
