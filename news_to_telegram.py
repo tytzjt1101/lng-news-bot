@@ -5,15 +5,17 @@ import os
 import re
 import time
 import html
+import hashlib
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
 
 BOT_TOKEN = os.environ["BOT_TOKEN"].strip()
 CHAT_ID = os.environ["CHAT_ID"].strip()
 
-HL = "ko"
-GL = "KR"
-CEID = "KR:ko"
+# English Google News RSS
+HL = "en"
+GL = "US"
+CEID = "US:en"
 
 STATE_FILE = "seen.json"
 
@@ -21,26 +23,103 @@ QUIET_HOUR_START = 21
 QUIET_HOUR_END = 6
 
 MAX_ITEMS_PER_RUN = 10
-MAX_ENTRIES_PER_KEYWORD = 10
+MAX_ENTRIES_PER_QUERY = 8
 MAX_AGE_DAYS = 30
 
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
 REQUEST_TIMEOUT = 20
-
 MAX_TELEGRAM_MESSAGE_LENGTH = 3800
 
-KEYWORDS = [
-    "LNG",
-    "호르무즈",
-    "카타르 LNG",
-    "Shell LNG",
-    "Wael Sawan",
-    "인도네시아 LNG",
+CATEGORY_QUOTA = {
+    "Plant Operations": 2,
+    "New Projects / FID": 1,
+    "Contract / SPA": 2,
+    "Labor / Regulatory Risk": 1,
+    "Market / Price": 1,
+    "Shipping / Geopolitics": 1,
+    "Company / Portfolio": 2,
+}
+
+QUERY_GROUPS = {
+    "Plant Operations": [
+        "LNG plant outage",
+        "LNG train shutdown",
+        "LNG force majeure",
+        "LNG plant restart",
+        "liquefaction plant maintenance",
+        "LNG production disruption",
+    ],
+    "New Projects / FID": [
+        "LNG final investment decision",
+        "LNG FID",
+        "LNG project expansion",
+        "LNG project commissioning",
+        "new liquefaction project",
+        "first LNG cargo project",
+    ],
+    "Contract / SPA": [
+        "LNG sale and purchase agreement",
+        "LNG SPA",
+        "LNG offtake agreement",
+        "long-term LNG contract",
+        "LNG supply deal",
+    ],
+    "Labor / Regulatory Risk": [
+        "LNG strike",
+        "LNG labor dispute",
+        "Australia LNG strike",
+        "LNG regulatory approval",
+        "LNG export permit",
+        "LNG environmental approval",
+    ],
+    "Market / Price": [
+        "JKM LNG price",
+        "Asia LNG spot price",
+        "Europe LNG imports",
+        "LNG demand Asia",
+        "TTF gas LNG",
+    ],
+    "Shipping / Geopolitics": [
+        "LNG shipping disruption",
+        "LNG freight rate",
+        "Hormuz LNG",
+        "Panama Canal LNG",
+        "Red Sea LNG shipping",
+    ],
+    "Company / Portfolio": [
+        "Shell LNG portfolio",
+        "QatarEnergy LNG",
+        "Cheniere LNG",
+        "TotalEnergies LNG",
+        "Petronas LNG",
+        "Woodside LNG",
+        "Chevron LNG",
+        "ExxonMobil LNG",
+    ],
+}
+
+PROJECT_WATCHLIST = [
+    "LNG Canada",
+    "Golden Pass LNG",
+    "Plaquemines LNG",
+    "Qatar North Field East",
+    "Qatar North Field South",
     "Tangguh LNG",
-    "호주 LNG",
-    "미국 LNG",
-    "LNG 가격",
+    "Ichthys LNG",
+    "Gorgon LNG",
+    "Wheatstone LNG",
+    "Prelude FLNG",
+    "Darwin LNG",
+    "Mozambique LNG",
+    "Rovuma LNG",
+    "Oman LNG",
+    "Freeport LNG",
+    "Sabine Pass",
+    "Corpus Christi",
+    "Cameron LNG",
+    "Calcasieu Pass",
+    "Arctic LNG 2",
 ]
 
 PREFERRED_SOURCES = [
@@ -51,233 +130,524 @@ PREFERRED_SOURCES = [
     "S&P Global",
     "Platts",
     "Argus",
-    "로이터",
-    "블룸버그",
-    "연합뉴스",
-]
-
-HIGH_PATTERNS = [
-    r"\boutage\b", r"\bshutdown\b", r"\bforce majeure\b", r"\bdisruption\b",
-    r"\bfire\b", r"\bexplosion\b", r"\bexport ban\b", r"\bsanctions?\b",
-    r"\bdelay\b", r"\bstrike\b", r"\bhormuz\b", r"\bpanama canal\b",
-    r"가동중단", r"운영중단", r"셧다운", r"화재", r"폭발",
-    r"공급차질", r"수출중단", r"제재", r"봉쇄", r"호르무즈",
-]
-
-MEDIUM_PATTERNS = [
-    r"\bexport\b", r"\bimports?\b", r"\bdemand\b", r"\bsupply\b",
-    r"\bcargo\b", r"\bfreight\b", r"\bshipping\b", r"\bjkm\b",
-    r"\bttf\b", r"\bhenry hub\b", r"\bpolicy\b",
-    r"수출", r"수입", r"수요", r"공급", r"운송", r"선적", r"정책", r"가격",
+    "LNG Prime",
+    "Natural Gas World",
+    "Offshore Energy",
+    "Upstream",
+    "Energy Intelligence",
 ]
 
 BLOCK_PATTERNS = [
-    r"\bstock\b", r"\bshares\b", r"\bdividend\b", r"\bearnings\b",
-    r"\bcrypto\b", r"\bbitcoin\b", r"\betf\b", r"\bforex\b",
-    r"주가", r"배당", r"실적", r"코인", r"비트코인", r"ETF",
+    r"\bcrypto\b",
+    r"\bbitcoin\b",
+    r"\betf\b",
+    r"\bforex\b",
+    r"\bdividend\b",
+    r"\bshare buyback\b",
+    r"crypto",
+    r"bitcoin",
+]
+
+SOFT_FINANCE_PATTERNS = [
+    r"\bstock\b",
+    r"\bshares\b",
+    r"\bearnings\b",
+    r"\bquarterly results\b",
+]
+
+ALLOW_FINANCE_IF_CONTAINS = [
+    r"\blng production\b",
+    r"\blng sales\b",
+    r"\blng volume\b",
+    r"\bliquefaction\b",
+    r"\bportfolio\b",
+    r"\bproject\b",
+]
+
+HIGH_PATTERNS_BY_CATEGORY = {
+    "Plant Operations": [
+        r"\boutage\b", r"\bshutdown\b", r"\bforce majeure\b", r"\bfire\b",
+        r"\bexplosion\b", r"\bdisruption\b", r"\brestart delay\b",
+        r"\bunplanned\b", r"\bmaintenance\b",
+    ],
+    "New Projects / FID": [
+        r"\bFID\b", r"final investment decision", r"\bsanctioned\b",
+        r"\bapproved\b", r"\bcommissioning\b", r"\bstart[- ]?up\b",
+        r"\bfirst LNG\b", r"\bexpansion\b",
+    ],
+    "Contract / SPA": [
+        r"\bSPA\b", r"sale and purchase agreement", r"offtake agreement",
+        r"supply agreement", r"long[- ]term contract", r"supply deal",
+    ],
+    "Labor / Regulatory Risk": [
+        r"\bstrike\b", r"\bunion\b", r"labor dispute", r"regulatory approval",
+        r"export permit", r"court ruling", r"environmental approval",
+    ],
+    "Market / Price": [
+        r"\bJKM\b", r"\bTTF\b", r"spot price", r"price spike",
+        r"demand surge", r"supply shortage", r"imports rise",
+    ],
+    "Shipping / Geopolitics": [
+        r"\bHormuz\b", r"Panama Canal", r"Red Sea", r"freight rate",
+        r"shipping disruption", r"vessel delay",
+    ],
+    "Company / Portfolio": [
+        r"portfolio", r"trading", r"supply portfolio", r"marketing",
+        r"Shell", r"QatarEnergy", r"Cheniere", r"TotalEnergies",
+        r"Petronas", r"Woodside", r"Chevron", r"ExxonMobil",
+    ],
+}
+
+MEDIUM_PATTERNS = [
+    r"\bexport\b", r"\bimport\b", r"\bdemand\b", r"\bsupply\b",
+    r"\bcargo\b", r"\bfreight\b", r"\bshipping\b", r"\bprice\b",
+    r"\bpolicy\b", r"\bcapacity\b", r"\btrain\b",
 ]
 
 
-def google_news_rss_url(keyword: str) -> str:
-    return f"https://news.google.com/rss/search?q={quote_plus(keyword)}&hl={HL}&gl={GL}&ceid={CEID}"
+def google_news_rss_url(query: str) -> str:
+    return (
+        "https://news.google.com/rss/search?"
+        f"q={quote_plus(query)}&hl={HL}&gl={GL}&ceid={CEID}"
+    )
 
 
 def load_seen() -> set:
-    if os.path.exists(STATE_FILE):
-        try:
-            with open(STATE_FILE, "r", encoding="utf-8") as f:
-                return set(json.load(f))
-        except:
-            pass
-    return set()
+    if not os.path.exists(STATE_FILE):
+        return set()
+
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, list):
+            return set(data)
+        return set()
+    except Exception:
+        return set()
 
 
 def save_seen(seen_set: set):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(list(seen_set), f, ensure_ascii=False, indent=2)
+        json.dump(sorted(list(seen_set)), f, ensure_ascii=False, indent=2)
+
+
+def clean_html_text(text: str) -> str:
+    text = text or ""
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def normalize_title(text: str) -> str:
-    text = re.sub(r"<[^>]+>", " ", text.lower())
+    text = clean_html_text(text).lower()
+    text = re.sub(r" - [^-]+$", "", text)
     text = re.sub(r"[^\w\s가-힣]", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
-def clean_html_text(text: str) -> str:
-    return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).strip()
+def title_hash(title: str) -> str:
+    normalized = normalize_title(title)
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def format_date(date_str):
-    """Fri, 10 Apr 2026 12:00:00 GMT → 10 Apr 2026 (Fri)"""
+def format_date(date_str: str) -> str:
+    if not date_str:
+        return "Unknown date"
+
+    formats = [
+        "%a, %d %b %Y %H:%M:%S %Z",
+        "%a, %d %b %Y %H:%M:%S GMT",
+        "%Y-%m-%dT%H:%M:%SZ",
+    ]
+
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return dt.strftime("%d %b %Y (%a)")
+        except Exception:
+            continue
+
     try:
-        dt = datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
+        dt = datetime(*feedparser._parse_date(date_str)[:6])
         return dt.strftime("%d %b %Y (%a)")
-    except:
-        return date_str or "Unknown"
+    except Exception:
+        return date_str[:30]
 
 
-def is_quiet_time_kst():
-    now = datetime.now(timezone(timedelta(hours=9))).hour
-    return now >= QUIET_HOUR_START or now < QUIET_HOUR_END
+def is_quiet_time_kst() -> bool:
+    now_kst = datetime.now(timezone(timedelta(hours=9))).hour
+    return now_kst >= QUIET_HOUR_START or now_kst < QUIET_HOUR_END
 
 
-def get_source(entry):
-    if hasattr(entry, "source") and entry.source:
-        return entry.source.get("title", "")
+def get_source(entry) -> str:
+    try:
+        if hasattr(entry, "source") and entry.source:
+            source_title = entry.source.get("title", "")
+            if source_title:
+                return source_title
+    except Exception:
+        pass
+
     title = entry.get("title", "")
-    return title.split(" - ")[-1] if " - " in title else ""
+    if " - " in title:
+        return title.split(" - ")[-1].strip()
+
+    return "Unknown"
 
 
-def is_preferred_source(source):
-    return any(x.lower() in source.lower() for x in PREFERRED_SOURCES)
+def is_preferred_source(source: str) -> bool:
+    source = source or ""
+    return any(s.lower() in source.lower() for s in PREFERRED_SOURCES)
 
 
-def is_recent_entry(entry):
-    if hasattr(entry, "published_parsed") and entry.published_parsed:
-        dt = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
-        return datetime.now(timezone.utc) - dt <= timedelta(days=MAX_AGE_DAYS)
+def is_recent_entry(entry) -> bool:
+    try:
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            dt = datetime.fromtimestamp(
+                time.mktime(entry.published_parsed),
+                tz=timezone.utc
+            )
+            return datetime.now(timezone.utc) - dt <= timedelta(days=MAX_AGE_DAYS)
+    except Exception:
+        pass
+
     return True
 
 
-def get_importance(title, summary, source):
+def detect_project(title: str, summary: str) -> str:
     text = f"{title} {summary}".lower()
-    score = (2 if is_preferred_source(source) else 0)
-    if any(re.search(p, text) for p in HIGH_PATTERNS):
-        score += 3
-    elif any(re.search(p, text) for p in MEDIUM_PATTERNS):
-        score += 1
-    return "🔴 HIGH" if score >= 5 else "🟠 MEDIUM" if score >= 2 else "🟢 LOW"
+
+    for project in PROJECT_WATCHLIST:
+        if project.lower() in text:
+            return project
+
+    return ""
 
 
-def is_valid_news(title, summary, keyword):
-    text = f"{title} {summary} {keyword}".lower()
-    related = ["lng","gas","천연가스","호르무즈","카타르","shell","인도네시아","호주","미국","가격","price","jkm"]
-    return any(x in text for x in related) and not any(re.search(p, text) for p in BLOCK_PATTERNS)
+def is_valid_news(title: str, summary: str, query: str, category: str) -> bool:
+    text = f"{title} {summary} {query}".lower()
+
+    core_terms = [
+        "lng", "liquefaction", "natural gas", "gas", "jkm", "ttf",
+        "qatarenergy", "shell", "cheniere", "totalenergies",
+        "petronas", "woodside", "chevron", "exxonmobil",
+    ]
+
+    if not any(term in text for term in core_terms):
+        return False
+
+    if any(re.search(p, text, re.IGNORECASE) for p in BLOCK_PATTERNS):
+        return False
+
+    has_soft_finance = any(
+        re.search(p, text, re.IGNORECASE) for p in SOFT_FINANCE_PATTERNS
+    )
+    has_allowed_context = any(
+        re.search(p, text, re.IGNORECASE) for p in ALLOW_FINANCE_IF_CONTAINS
+    )
+
+    if has_soft_finance and not has_allowed_context:
+        return False
+
+    return True
+
+
+def calculate_score(title: str, summary: str, source: str, category: str, project: str) -> int:
+    text = f"{title} {summary}"
+
+    score = 0
+
+    if is_preferred_source(source):
+        score += 2
+
+    if project:
+        score += 2
+
+    for pattern in HIGH_PATTERNS_BY_CATEGORY.get(category, []):
+        if re.search(pattern, text, re.IGNORECASE):
+            score += 3
+            break
+
+    for pattern in MEDIUM_PATTERNS:
+        if re.search(pattern, text, re.IGNORECASE):
+            score += 1
+            break
+
+    return score
+
+
+def get_importance(score: int) -> str:
+    if score >= 6:
+        return "🔴 HIGH"
+    if score >= 3:
+        return "🟠 MEDIUM"
+    return "🟢 LOW"
+
+
+def make_korean_note(category: str, title: str, project: str) -> str:
+    """
+    외부 번역 API/라이브러리 없이 안정적으로 보내기 위한 규칙 기반 한글 보조 설명.
+    예전 googletrans류 오류를 피하기 위해 네트워크 번역을 쓰지 않음.
+    """
+    project_part = f"{project} 관련 " if project else ""
+
+    notes = {
+        "Plant Operations": "가동, 정비, 차질, 재개 가능성을 확인할 필요가 있는 기사입니다.",
+        "New Projects / FID": "신규 프로젝트, 증설, FID, 시운전 관련 기사입니다.",
+        "Contract / SPA": "LNG 장기계약, SPA, offtake 관련 기사입니다.",
+        "Labor / Regulatory Risk": "파업, 인허가, 규제 리스크 관련 기사입니다.",
+        "Market / Price": "LNG 가격, 수급, JKM/TTF 관련 기사입니다.",
+        "Shipping / Geopolitics": "운송, 항로, 지정학 리스크 관련 기사입니다.",
+        "Company / Portfolio": "주요 LNG 회사의 포트폴리오, 트레이딩, 공급 전략 관련 기사입니다.",
+    }
+
+    return project_part + notes.get(category, "LNG 산업 관련 기사입니다.")
 
 
 def fetch_news():
     items = []
-    for kw in KEYWORDS:
-        feed = feedparser.parse(google_news_rss_url(kw))
-        for entry in feed.entries[:MAX_ENTRIES_PER_KEYWORD]:
-            title = entry.get("title", "")
-            link = entry.get("link", "")
-            summary = clean_html_text(entry.get("summary", ""))
 
-            if not title or not link:
-                continue
-            if not is_recent_entry(entry):
-                continue
-            if not is_valid_news(title, summary, kw):
+    for category, queries in QUERY_GROUPS.items():
+        for query in queries:
+            try:
+                feed = feedparser.parse(google_news_rss_url(query))
+            except Exception:
                 continue
 
-            items.append({
-                "uid": f"{link}|{normalize_title(title)}",
-                "title": title,
-                "link": link,
-                "source": get_source(entry),
-                "keyword": kw,
-                "published": format_date(entry.get("published", "")),
-                "importance": get_importance(title, summary, get_source(entry)),
-            })
-        time.sleep(1)
+            for entry in feed.entries[:MAX_ENTRIES_PER_QUERY]:
+                title = clean_html_text(entry.get("title", ""))
+                link = entry.get("link", "")
+                summary = clean_html_text(entry.get("summary", ""))
+                source = get_source(entry)
+                project = detect_project(title, summary)
+
+                if not title or not link:
+                    continue
+
+                if not is_recent_entry(entry):
+                    continue
+
+                if not is_valid_news(title, summary, query, category):
+                    continue
+
+                score = calculate_score(title, summary, source, category, project)
+
+                uid_base = f"{link}|{title_hash(title)}"
+
+                items.append({
+                    "uid": uid_base,
+                    "title": title,
+                    "link": link,
+                    "summary": summary[:300],
+                    "source": source,
+                    "category": category,
+                    "keyword": query,
+                    "project": project,
+                    "published": format_date(entry.get("published", "")),
+                    "score": score,
+                    "importance": get_importance(score),
+                    "korean_note": make_korean_note(category, title, project),
+                    "title_hash": title_hash(title),
+                })
+
+            time.sleep(1)
+
     return items
 
 
-def deduplicate_and_sort(items, seen):
+def deduplicate(items, seen):
     result = []
-    seen_titles = set()
+    used_links = set()
+    used_title_hashes = set()
 
     for item in items:
         if item["uid"] in seen:
             continue
-        if item["title"] in seen_titles:
+
+        if item["link"] in used_links:
             continue
-        seen_titles.add(item["title"])
+
+        if item["title_hash"] in used_title_hashes:
+            continue
+
+        used_links.add(item["link"])
+        used_title_hashes.add(item["title_hash"])
         result.append(item)
 
-    result.sort(key=lambda x: ("HIGH" in x["importance"], is_preferred_source(x["source"])), reverse=True)
-    return result[:MAX_ITEMS_PER_RUN]
+    return result
+
+
+def select_by_category_quota(items):
+    selected = []
+
+    for category, quota in CATEGORY_QUOTA.items():
+        category_items = [
+            item for item in items
+            if item["category"] == category
+        ]
+
+        category_items.sort(
+            key=lambda x: (
+                x["score"],
+                is_preferred_source(x["source"]),
+                bool(x["project"]),
+            ),
+            reverse=True
+        )
+
+        selected.extend(category_items[:quota])
+
+    selected.sort(
+        key=lambda x: (
+            list(CATEGORY_QUOTA.keys()).index(x["category"]),
+            -x["score"],
+        )
+    )
+
+    return selected[:MAX_ITEMS_PER_RUN]
 
 
 def format_single_item(item):
-    return "\n".join([
+    safe_link = html.escape(item["link"], quote=True)
+    safe_title = html.escape(item["title"])
+    safe_source = html.escape(item["source"] or "Unknown")
+    safe_keyword = html.escape(item["keyword"])
+    safe_project = html.escape(item["project"] or "-")
+    safe_category = html.escape(item["category"])
+    safe_date = html.escape(item["published"])
+    safe_note = html.escape(item["korean_note"])
+
+    lines = [
         item["importance"],
-        html.escape(item["published"]),
-        f'<a href="{item["link"]}">{html.escape(item["title"])}</a>',
-        f"Source: {html.escape(item['source'] or 'Unknown')}",
-        f"Keyword: {html.escape(item['keyword'])}",
-    ])
+        f"<b>[{safe_category}]</b>",
+        safe_date,
+        f'<a href="{safe_link}">{safe_title}</a>',
+        f"요약: {safe_note}",
+        f"Source: {safe_source}",
+        f"Project: {safe_project}",
+        f"Keyword: {safe_keyword}",
+    ]
+
+    return "\n".join(lines)
 
 
 def chunk_messages(items):
-    chunks = []
-    current = []
-    length = 0
+    messages = []
+    current_blocks = []
+    current_length = 0
+
+    header = "📰 LNG Industry Monitor\n\n"
+    current_length = len(header)
 
     for item in items:
-        text = format_single_item(item)
-        add_len = len(text) + (2 if current else 0)
+        block = format_single_item(item)
+        block_len = len(block) + 2
 
-        if current and length + add_len > MAX_TELEGRAM_MESSAGE_LENGTH:
-            chunks.append(current)
-            current = [text]
-            length = len(text)
+        if current_blocks and current_length + block_len > MAX_TELEGRAM_MESSAGE_LENGTH:
+            messages.append(header + "\n\n".join(current_blocks))
+            current_blocks = [block]
+            current_length = len(header) + len(block)
         else:
-            current.append(text)
-            length += add_len
+            current_blocks.append(block)
+            current_length += block_len
 
-    if current:
-        chunks.append(current)
+    if current_blocks:
+        messages.append(header + "\n\n".join(current_blocks))
 
-    messages = []
+    if len(messages) <= 1:
+        return messages
 
-    if len(chunks) == 1:
-        messages.append("📰 LNG News Digest\n\n" + "\n\n".join(chunks[0]))
-    else:
-        for i, chunk in enumerate(chunks, 1):
-            messages.append(f"📰 LNG News Digest (Part {i})\n\n" + "\n\n".join(chunk))
+    numbered = []
+    for i, msg in enumerate(messages, 1):
+        numbered.append(msg.replace(
+            "📰 LNG Industry Monitor",
+            f"📰 LNG Industry Monitor (Part {i}/{len(messages)})"
+        ))
 
-    return messages
+    return numbered
 
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
 
-    for _ in range(MAX_RETRY):
-        r = requests.post(url, json=payload, timeout=REQUEST_TIMEOUT)
-        if r.status_code == 200:
-            time.sleep(SEND_INTERVAL_SECONDS)
-            return True
-        if r.status_code == 429:
-            time.sleep(10)
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+    }
+
+    for attempt in range(1, MAX_RETRY + 1):
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=REQUEST_TIMEOUT
+            )
+
+            if response.status_code == 200:
+                time.sleep(SEND_INTERVAL_SECONDS)
+                return True
+
+            if response.status_code == 429:
+                retry_after = 10
+                try:
+                    retry_after = response.json().get(
+                        "parameters", {}
+                    ).get("retry_after", 10)
+                except Exception:
+                    pass
+
+                time.sleep(retry_after + 1)
+                continue
+
+            if response.status_code in [500, 502, 503, 504]:
+                time.sleep(5 * attempt)
+                continue
+
+            print(f"Telegram send failed: {response.status_code} {response.text}")
+            return False
+
+        except requests.exceptions.RequestException as e:
+            print(f"Telegram request error on attempt {attempt}: {e}")
+            time.sleep(5 * attempt)
+
     return False
 
 
 def main():
     if is_quiet_time_kst():
+        print("Quiet time in KST. Skip sending.")
         return
 
     seen = load_seen()
-    new_seen = set(seen)
 
-    items = deduplicate_and_sort(fetch_news(), seen)
+    all_items = fetch_news()
+    fresh_items = deduplicate(all_items, seen)
+    selected_items = select_by_category_quota(fresh_items)
 
-    if not items:
-        save_seen(new_seen)
+    if not selected_items:
+        print("No new LNG news found.")
+        save_seen(seen)
         return
 
-    messages = chunk_messages(items)
+    messages = chunk_messages(selected_items)
 
+    sent_all = True
     for msg in messages:
-        if not send_telegram(msg):
+        ok = send_telegram(msg)
+        if not ok:
+            sent_all = False
             break
 
-    for item in items:
-        new_seen.add(item["uid"])
-
-    save_seen(new_seen)
+    if sent_all:
+        for item in selected_items:
+            seen.add(item["uid"])
+        save_seen(seen)
+        print(f"Sent {len(selected_items)} items.")
+    else:
+        print("Sending failed. Seen state not updated.")
 
 
 if __name__ == "__main__":
