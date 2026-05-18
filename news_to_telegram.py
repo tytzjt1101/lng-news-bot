@@ -6,13 +6,14 @@ import re
 import time
 import html
 import hashlib
+
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
+from deep_translator import GoogleTranslator
 
 BOT_TOKEN = os.environ["BOT_TOKEN"].strip()
 CHAT_ID = os.environ["CHAT_ID"].strip()
 
-# English Google News RSS
 HL = "en"
 GL = "US"
 CEID = "US:en"
@@ -29,6 +30,7 @@ MAX_AGE_DAYS = 30
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
 REQUEST_TIMEOUT = 20
+
 MAX_TELEGRAM_MESSAGE_LENGTH = 3800
 
 CATEGORY_QUOTA = {
@@ -144,8 +146,6 @@ BLOCK_PATTERNS = [
     r"\bforex\b",
     r"\bdividend\b",
     r"\bshare buyback\b",
-    r"crypto",
-    r"bitcoin",
 ]
 
 SOFT_FINANCE_PATTERNS = [
@@ -166,42 +166,88 @@ ALLOW_FINANCE_IF_CONTAINS = [
 
 HIGH_PATTERNS_BY_CATEGORY = {
     "Plant Operations": [
-        r"\boutage\b", r"\bshutdown\b", r"\bforce majeure\b", r"\bfire\b",
-        r"\bexplosion\b", r"\bdisruption\b", r"\brestart delay\b",
-        r"\bunplanned\b", r"\bmaintenance\b",
+        r"\boutage\b",
+        r"\bshutdown\b",
+        r"\bforce majeure\b",
+        r"\bfire\b",
+        r"\bexplosion\b",
+        r"\bdisruption\b",
+        r"\brestart delay\b",
+        r"\bunplanned\b",
+        r"\bmaintenance\b",
     ],
     "New Projects / FID": [
-        r"\bFID\b", r"final investment decision", r"\bsanctioned\b",
-        r"\bapproved\b", r"\bcommissioning\b", r"\bstart[- ]?up\b",
-        r"\bfirst LNG\b", r"\bexpansion\b",
+        r"\bFID\b",
+        r"final investment decision",
+        r"\bsanctioned\b",
+        r"\bapproved\b",
+        r"\bcommissioning\b",
+        r"\bstart[- ]?up\b",
+        r"\bfirst LNG\b",
+        r"\bexpansion\b",
     ],
     "Contract / SPA": [
-        r"\bSPA\b", r"sale and purchase agreement", r"offtake agreement",
-        r"supply agreement", r"long[- ]term contract", r"supply deal",
+        r"\bSPA\b",
+        r"sale and purchase agreement",
+        r"offtake agreement",
+        r"supply agreement",
+        r"long[- ]term contract",
+        r"supply deal",
     ],
     "Labor / Regulatory Risk": [
-        r"\bstrike\b", r"\bunion\b", r"labor dispute", r"regulatory approval",
-        r"export permit", r"court ruling", r"environmental approval",
+        r"\bstrike\b",
+        r"\bunion\b",
+        r"labor dispute",
+        r"regulatory approval",
+        r"export permit",
+        r"court ruling",
+        r"environmental approval",
     ],
     "Market / Price": [
-        r"\bJKM\b", r"\bTTF\b", r"spot price", r"price spike",
-        r"demand surge", r"supply shortage", r"imports rise",
+        r"\bJKM\b",
+        r"\bTTF\b",
+        r"spot price",
+        r"price spike",
+        r"demand surge",
+        r"supply shortage",
+        r"imports rise",
     ],
     "Shipping / Geopolitics": [
-        r"\bHormuz\b", r"Panama Canal", r"Red Sea", r"freight rate",
-        r"shipping disruption", r"vessel delay",
+        r"\bHormuz\b",
+        r"Panama Canal",
+        r"Red Sea",
+        r"freight rate",
+        r"shipping disruption",
+        r"vessel delay",
     ],
     "Company / Portfolio": [
-        r"portfolio", r"trading", r"supply portfolio", r"marketing",
-        r"Shell", r"QatarEnergy", r"Cheniere", r"TotalEnergies",
-        r"Petronas", r"Woodside", r"Chevron", r"ExxonMobil",
+        r"portfolio",
+        r"trading",
+        r"supply portfolio",
+        r"marketing",
+        r"Shell",
+        r"QatarEnergy",
+        r"Cheniere",
+        r"TotalEnergies",
+        r"Petronas",
+        r"Woodside",
+        r"Chevron",
+        r"ExxonMobil",
     ],
 }
 
 MEDIUM_PATTERNS = [
-    r"\bexport\b", r"\bimport\b", r"\bdemand\b", r"\bsupply\b",
-    r"\bcargo\b", r"\bfreight\b", r"\bshipping\b", r"\bprice\b",
-    r"\bpolicy\b", r"\bcapacity\b", r"\btrain\b",
+    r"\bexport\b",
+    r"\bimport\b",
+    r"\bdemand\b",
+    r"\bsupply\b",
+    r"\bcargo\b",
+    r"\bfreight\b",
+    r"\bshipping\b",
+    r"\bprice\b",
+    r"\bpolicy\b",
+    r"\bcapacity\b",
+    r"\btrain\b",
 ]
 
 
@@ -222,9 +268,11 @@ def load_seen() -> set:
 
         if isinstance(data, list):
             return set(data)
-        return set()
+
     except Exception:
-        return set()
+        pass
+
+    return set()
 
 
 def save_seen(seen_set: set):
@@ -255,21 +303,8 @@ def format_date(date_str: str) -> str:
     if not date_str:
         return "Unknown date"
 
-    formats = [
-        "%a, %d %b %Y %H:%M:%S %Z",
-        "%a, %d %b %Y %H:%M:%S GMT",
-        "%Y-%m-%dT%H:%M:%SZ",
-    ]
-
-    for fmt in formats:
-        try:
-            dt = datetime.strptime(date_str, fmt)
-            return dt.strftime("%d %b %Y (%a)")
-        except Exception:
-            continue
-
     try:
-        dt = datetime(*feedparser._parse_date(date_str)[:6])
+        dt = datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
         return dt.strftime("%d %b %Y (%a)")
     except Exception:
         return date_str[:30]
@@ -325,13 +360,16 @@ def detect_project(title: str, summary: str) -> str:
     return ""
 
 
-def is_valid_news(title: str, summary: str, query: str, category: str) -> bool:
+def is_valid_news(title: str, summary: str, query: str) -> bool:
     text = f"{title} {summary} {query}".lower()
 
     core_terms = [
-        "lng", "liquefaction", "natural gas", "gas", "jkm", "ttf",
-        "qatarenergy", "shell", "cheniere", "totalenergies",
-        "petronas", "woodside", "chevron", "exxonmobil",
+        "lng",
+        "liquefaction",
+        "natural gas",
+        "gas",
+        "jkm",
+        "ttf",
     ]
 
     if not any(term in text for term in core_terms):
@@ -343,6 +381,7 @@ def is_valid_news(title: str, summary: str, query: str, category: str) -> bool:
     has_soft_finance = any(
         re.search(p, text, re.IGNORECASE) for p in SOFT_FINANCE_PATTERNS
     )
+
     has_allowed_context = any(
         re.search(p, text, re.IGNORECASE) for p in ALLOW_FINANCE_IF_CONTAINS
     )
@@ -353,7 +392,7 @@ def is_valid_news(title: str, summary: str, query: str, category: str) -> bool:
     return True
 
 
-def calculate_score(title: str, summary: str, source: str, category: str, project: str) -> int:
+def calculate_score(title, summary, source, category, project):
     text = f"{title} {summary}"
 
     score = 0
@@ -380,46 +419,64 @@ def calculate_score(title: str, summary: str, source: str, category: str, projec
 def get_importance(score: int) -> str:
     if score >= 6:
         return "🔴 HIGH"
+
     if score >= 3:
         return "🟠 MEDIUM"
+
     return "🟢 LOW"
 
 
-def make_korean_note(category: str, title: str, project: str) -> str:
+def translate_title_to_korean(title: str) -> str:
     """
-    외부 번역 API/라이브러리 없이 안정적으로 보내기 위한 규칙 기반 한글 보조 설명.
-    예전 googletrans류 오류를 피하기 위해 네트워크 번역을 쓰지 않음.
+    번역 실패해도 전체 봇이 죽지 않도록 구성
     """
-    project_part = f"{project} 관련 " if project else ""
 
-    notes = {
-        "Plant Operations": "가동, 정비, 차질, 재개 가능성을 확인할 필요가 있는 기사입니다.",
-        "New Projects / FID": "신규 프로젝트, 증설, FID, 시운전 관련 기사입니다.",
-        "Contract / SPA": "LNG 장기계약, SPA, offtake 관련 기사입니다.",
-        "Labor / Regulatory Risk": "파업, 인허가, 규제 리스크 관련 기사입니다.",
-        "Market / Price": "LNG 가격, 수급, JKM/TTF 관련 기사입니다.",
-        "Shipping / Geopolitics": "운송, 항로, 지정학 리스크 관련 기사입니다.",
-        "Company / Portfolio": "주요 LNG 회사의 포트폴리오, 트레이딩, 공급 전략 관련 기사입니다.",
-    }
+    try:
+        translated = GoogleTranslator(
+            source="en",
+            target="ko"
+        ).translate(title)
 
-    return project_part + notes.get(category, "LNG 산업 관련 기사입니다.")
+        if translated and isinstance(translated, str):
+            return translated.strip()
+
+        return title
+
+    except Exception as e:
+        print(f"Translation failed: {e}")
+        return title
 
 
 def fetch_news():
     items = []
 
     for category, queries in QUERY_GROUPS.items():
+
         for query in queries:
+
             try:
-                feed = feedparser.parse(google_news_rss_url(query))
-            except Exception:
+                feed = feedparser.parse(
+                    google_news_rss_url(query)
+                )
+
+            except Exception as e:
+                print(f"Feed parse failed: {query} / {e}")
                 continue
 
             for entry in feed.entries[:MAX_ENTRIES_PER_QUERY]:
-                title = clean_html_text(entry.get("title", ""))
+
+                title = clean_html_text(
+                    entry.get("title", "")
+                )
+
                 link = entry.get("link", "")
-                summary = clean_html_text(entry.get("summary", ""))
+
+                summary = clean_html_text(
+                    entry.get("summary", "")
+                )
+
                 source = get_source(entry)
+
                 project = detect_project(title, summary)
 
                 if not title or not link:
@@ -428,26 +485,34 @@ def fetch_news():
                 if not is_recent_entry(entry):
                     continue
 
-                if not is_valid_news(title, summary, query, category):
+                if not is_valid_news(title, summary, query):
                     continue
 
-                score = calculate_score(title, summary, source, category, project)
+                score = calculate_score(
+                    title,
+                    summary,
+                    source,
+                    category,
+                    project
+                )
 
                 uid_base = f"{link}|{title_hash(title)}"
 
                 items.append({
                     "uid": uid_base,
                     "title": title,
+                    "korean_title": translate_title_to_korean(title),
                     "link": link,
                     "summary": summary[:300],
                     "source": source,
                     "category": category,
                     "keyword": query,
                     "project": project,
-                    "published": format_date(entry.get("published", "")),
+                    "published": format_date(
+                        entry.get("published", "")
+                    ),
                     "score": score,
                     "importance": get_importance(score),
-                    "korean_note": make_korean_note(category, title, project),
                     "title_hash": title_hash(title),
                 })
 
@@ -458,10 +523,12 @@ def fetch_news():
 
 def deduplicate(items, seen):
     result = []
+
     used_links = set()
     used_title_hashes = set()
 
     for item in items:
+
         if item["uid"] in seen:
             continue
 
@@ -473,6 +540,7 @@ def deduplicate(items, seen):
 
         used_links.add(item["link"])
         used_title_hashes.add(item["title_hash"])
+
         result.append(item)
 
     return result
@@ -482,6 +550,7 @@ def select_by_category_quota(items):
     selected = []
 
     for category, quota in CATEGORY_QUOTA.items():
+
         category_items = [
             item for item in items
             if item["category"] == category
@@ -500,7 +569,9 @@ def select_by_category_quota(items):
 
     selected.sort(
         key=lambda x: (
-            list(CATEGORY_QUOTA.keys()).index(x["category"]),
+            list(CATEGORY_QUOTA.keys()).index(
+                x["category"]
+            ),
             -x["score"],
         )
     )
@@ -509,21 +580,46 @@ def select_by_category_quota(items):
 
 
 def format_single_item(item):
-    safe_link = html.escape(item["link"], quote=True)
-    safe_title = html.escape(item["title"])
-    safe_source = html.escape(item["source"] or "Unknown")
-    safe_keyword = html.escape(item["keyword"])
-    safe_project = html.escape(item["project"] or "-")
-    safe_category = html.escape(item["category"])
-    safe_date = html.escape(item["published"])
-    safe_note = html.escape(item["korean_note"])
+
+    safe_link = html.escape(
+        item["link"],
+        quote=True
+    )
+
+    safe_title = html.escape(
+        item["title"]
+    )
+
+    safe_korean_title = html.escape(
+        item.get("korean_title") or item["title"]
+    )
+
+    safe_source = html.escape(
+        item["source"] or "Unknown"
+    )
+
+    safe_keyword = html.escape(
+        item["keyword"]
+    )
+
+    safe_project = html.escape(
+        item["project"] or "-"
+    )
+
+    safe_category = html.escape(
+        item["category"]
+    )
+
+    safe_date = html.escape(
+        item["published"]
+    )
 
     lines = [
         item["importance"],
         f"<b>[{safe_category}]</b>",
         safe_date,
-        f'<a href="{safe_link}">{safe_title}</a>',
-        f"요약: {safe_note}",
+        f'<a href="{safe_link}">{safe_korean_title}</a>',
+        f"Original: {safe_title}",
         f"Source: {safe_source}",
         f"Project: {safe_project}",
         f"Keyword: {safe_keyword}",
@@ -533,43 +629,57 @@ def format_single_item(item):
 
 
 def chunk_messages(items):
+
     messages = []
+
     current_blocks = []
+
     current_length = 0
 
     header = "📰 LNG Industry Monitor\n\n"
+
     current_length = len(header)
 
     for item in items:
+
         block = format_single_item(item)
+
         block_len = len(block) + 2
 
-        if current_blocks and current_length + block_len > MAX_TELEGRAM_MESSAGE_LENGTH:
-            messages.append(header + "\n\n".join(current_blocks))
+        if (
+            current_blocks and
+            current_length + block_len >
+            MAX_TELEGRAM_MESSAGE_LENGTH
+        ):
+
+            messages.append(
+                header + "\n\n".join(current_blocks)
+            )
+
             current_blocks = [block]
-            current_length = len(header) + len(block)
+
+            current_length = (
+                len(header) + len(block)
+            )
+
         else:
             current_blocks.append(block)
             current_length += block_len
 
     if current_blocks:
-        messages.append(header + "\n\n".join(current_blocks))
+        messages.append(
+            header + "\n\n".join(current_blocks)
+        )
 
-    if len(messages) <= 1:
-        return messages
-
-    numbered = []
-    for i, msg in enumerate(messages, 1):
-        numbered.append(msg.replace(
-            "📰 LNG Industry Monitor",
-            f"📰 LNG Industry Monitor (Part {i}/{len(messages)})"
-        ))
-
-    return numbered
+    return messages
 
 
 def send_telegram(text):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{BOT_TOKEN}/sendMessage"
+    )
 
     payload = {
         "chat_id": CHAT_ID,
@@ -579,7 +689,9 @@ def send_telegram(text):
     }
 
     for attempt in range(1, MAX_RETRY + 1):
+
         try:
+
             response = requests.post(
                 url,
                 json=payload,
@@ -587,67 +699,107 @@ def send_telegram(text):
             )
 
             if response.status_code == 200:
-                time.sleep(SEND_INTERVAL_SECONDS)
+                time.sleep(
+                    SEND_INTERVAL_SECONDS
+                )
                 return True
 
             if response.status_code == 429:
+
                 retry_after = 10
+
                 try:
                     retry_after = response.json().get(
-                        "parameters", {}
+                        "parameters",
+                        {}
                     ).get("retry_after", 10)
+
                 except Exception:
                     pass
 
                 time.sleep(retry_after + 1)
+
                 continue
 
-            if response.status_code in [500, 502, 503, 504]:
+            if response.status_code in [
+                500, 502, 503, 504
+            ]:
                 time.sleep(5 * attempt)
                 continue
 
-            print(f"Telegram send failed: {response.status_code} {response.text}")
+            print(
+                f"Telegram send failed: "
+                f"{response.status_code} "
+                f"{response.text}"
+            )
+
             return False
 
         except requests.exceptions.RequestException as e:
-            print(f"Telegram request error on attempt {attempt}: {e}")
+
+            print(
+                f"Telegram request error: {e}"
+            )
+
             time.sleep(5 * attempt)
 
     return False
 
 
 def main():
+
     if is_quiet_time_kst():
-        print("Quiet time in KST. Skip sending.")
+        print("Quiet time. Skip.")
         return
 
     seen = load_seen()
 
     all_items = fetch_news()
-    fresh_items = deduplicate(all_items, seen)
-    selected_items = select_by_category_quota(fresh_items)
+
+    fresh_items = deduplicate(
+        all_items,
+        seen
+    )
+
+    selected_items = select_by_category_quota(
+        fresh_items
+    )
 
     if not selected_items:
-        print("No new LNG news found.")
+        print("No new LNG news.")
         save_seen(seen)
         return
 
-    messages = chunk_messages(selected_items)
+    messages = chunk_messages(
+        selected_items
+    )
 
     sent_all = True
+
     for msg in messages:
+
         ok = send_telegram(msg)
+
         if not ok:
             sent_all = False
             break
 
     if sent_all:
+
         for item in selected_items:
             seen.add(item["uid"])
+
         save_seen(seen)
-        print(f"Sent {len(selected_items)} items.")
+
+        print(
+            f"Sent {len(selected_items)} items."
+        )
+
     else:
-        print("Sending failed. Seen state not updated.")
+        print(
+            "Sending failed. "
+            "seen.json not updated."
+        )
 
 
 if __name__ == "__main__":
