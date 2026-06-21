@@ -26,7 +26,7 @@ KST = timezone(timedelta(hours=9))
 QUIET_HOUR_START = 21
 QUIET_HOUR_END = 6
 
-MAX_ITEMS_PER_RUN = 10
+MAX_ITEMS_PER_RUN = 14
 MAX_ENTRIES_PER_QUERY = 8
 
 NEWS_DATE_WINDOW_DAYS = 1
@@ -46,6 +46,8 @@ CATEGORY_QUOTA = {
     "Market / Price": 1,
     "Shipping / Geopolitics": 1,
     "Company / Portfolio": 2,
+    "Geopolitical / Macro Risk": 2,
+    "Oil / Energy Market": 2,
 }
 
 QUERY_GROUPS = {
@@ -104,6 +106,30 @@ QUERY_GROUPS = {
         "Chevron LNG",
         "ExxonMobil LNG",
     ],
+    "Geopolitical / Macro Risk": [
+        "ceasefire energy markets",
+        "peace talks oil gas prices",
+        "war ends oil prices",
+        "Middle East ceasefire oil prices",
+        "Russia Ukraine ceasefire gas prices",
+        "Israel Iran conflict oil gas",
+        "Gaza ceasefire oil prices",
+        "sanctions oil gas supply",
+        "Hormuz oil LNG risk",
+        "Red Sea shipping energy markets",
+    ],
+    "Oil / Energy Market": [
+        "Brent crude oil price LNG",
+        "WTI crude oil price natural gas",
+        "oil prices gas markets",
+        "OPEC oil production gas prices",
+        "OPEC+ output decision oil price",
+        "crude oil inventory prices",
+        "oil demand outlook Asia gas",
+        "oil price impact LNG",
+        "Brent crude Asian energy market",
+        "oil market geopolitical risk",
+    ],
 }
 
 PROJECT_WATCHLIST = [
@@ -144,6 +170,35 @@ PREFERRED_SOURCES = [
     "Energy Intelligence",
 ]
 
+MARKET_DRIVER_CATEGORIES = [
+    "Geopolitical / Macro Risk",
+    "Oil / Energy Market",
+]
+
+MARKET_DRIVER_TERMS = [
+    "oil",
+    "crude",
+    "brent",
+    "wti",
+    "opec",
+    "opec+",
+    "ceasefire",
+    "peace talks",
+    "war",
+    "conflict",
+    "sanctions",
+    "hormuz",
+    "red sea",
+    "middle east",
+    "ukraine",
+    "russia",
+    "iran",
+    "israel",
+    "gaza",
+    "shipping",
+    "energy market",
+]
+
 BLOCK_PATTERNS = [
     r"\bcrypto\b",
     r"\bbitcoin\b",
@@ -167,6 +222,13 @@ ALLOW_FINANCE_IF_CONTAINS = [
     r"\bliquefaction\b",
     r"\bportfolio\b",
     r"\bproject\b",
+    r"\boil price\b",
+    r"\bcrude\b",
+    r"\bbrent\b",
+    r"\bwti\b",
+    r"\bopec\b",
+    r"\bgas price\b",
+    r"\benergy market\b",
 ]
 
 HIGH_PATTERNS_BY_CATEGORY = {
@@ -239,6 +301,32 @@ HIGH_PATTERNS_BY_CATEGORY = {
         r"Chevron",
         r"ExxonMobil",
     ],
+    "Geopolitical / Macro Risk": [
+        r"\bceasefire\b",
+        r"\bpeace talks\b",
+        r"\bwar\b",
+        r"\bconflict\b",
+        r"\bsanctions\b",
+        r"\bHormuz\b",
+        r"\bRed Sea\b",
+        r"\bMiddle East\b",
+        r"\bIran\b",
+        r"\bIsrael\b",
+        r"\bRussia\b",
+        r"\bUkraine\b",
+    ],
+    "Oil / Energy Market": [
+        r"\bBrent\b",
+        r"\bWTI\b",
+        r"\bcrude\b",
+        r"\boil price\b",
+        r"\bOPEC\b",
+        r"\bOPEC\+",
+        r"\binventories\b",
+        r"\bdemand outlook\b",
+        r"\bproduction cut\b",
+        r"\boutput hike\b",
+    ],
 }
 
 MEDIUM_PATTERNS = [
@@ -253,6 +341,14 @@ MEDIUM_PATTERNS = [
     r"\bpolicy\b",
     r"\bcapacity\b",
     r"\btrain\b",
+    r"\boil\b",
+    r"\bcrude\b",
+    r"\bbrent\b",
+    r"\bwti\b",
+    r"\bopec\b",
+    r"\bsanctions\b",
+    r"\bceasefire\b",
+    r"\bconflict\b",
 ]
 
 
@@ -397,8 +493,9 @@ def detect_project(title: str, summary: str) -> str:
     return ""
 
 
-def is_valid_news(title: str, summary: str, query: str) -> bool:
-    text = f"{title} {summary} {query}".lower()
+def is_valid_news(title: str, summary: str, query: str, category: str) -> bool:
+    article_text = f"{title} {summary}".lower()
+    search_text = f"{title} {summary} {query}".lower()
 
     core_terms = [
         "lng",
@@ -409,21 +506,33 @@ def is_valid_news(title: str, summary: str, query: str) -> bool:
         "ttf",
     ]
 
-    if not any(term in text for term in core_terms):
+    has_lng_context = any(
+        term in search_text for term in core_terms
+    )
+
+    has_market_driver_context = (
+        category in MARKET_DRIVER_CATEGORIES
+        and any(
+            term in search_text
+            for term in MARKET_DRIVER_TERMS
+        )
+    )
+
+    if not has_lng_context and not has_market_driver_context:
         return False
 
-    if any(re.search(p, text, re.IGNORECASE) for p in BLOCK_PATTERNS):
+    if any(re.search(p, search_text, re.IGNORECASE) for p in BLOCK_PATTERNS):
         return False
 
     has_soft_finance = any(
-        re.search(p, text, re.IGNORECASE) for p in SOFT_FINANCE_PATTERNS
+        re.search(p, search_text, re.IGNORECASE) for p in SOFT_FINANCE_PATTERNS
     )
 
     has_allowed_context = any(
-        re.search(p, text, re.IGNORECASE) for p in ALLOW_FINANCE_IF_CONTAINS
+        re.search(p, search_text, re.IGNORECASE) for p in ALLOW_FINANCE_IF_CONTAINS
     )
 
-    if has_soft_finance and not has_allowed_context:
+    if has_soft_finance and not has_allowed_context and not has_market_driver_context:
         return False
 
     return True
@@ -524,7 +633,7 @@ def fetch_news():
                 if not is_recent_entry(entry):
                     continue
 
-                if not is_valid_news(title, summary, query):
+                if not is_valid_news(title, summary, query, category):
                     continue
 
                 score = calculate_score(
