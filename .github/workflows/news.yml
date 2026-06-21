@@ -2,8 +2,12 @@ name: LNG News Alert
 
 on:
   schedule:
-    # UTC 기준 22:00 = 한국시간 오전 7시
-    - cron: "0 22 * * *"
+    # UTC 기준 21:00 = 한국시간 오전 6시
+    - cron: "0 21 * * *"
+
+    # UTC 기준 04:00 = 한국시간 오후 1시
+    - cron: "0 4 * * *"
+
   workflow_dispatch:
 
 permissions:
