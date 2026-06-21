@@ -6,6 +6,7 @@ import re
 import time
 import html
 import hashlib
+import calendar
 
 from urllib.parse import quote_plus
 from datetime import datetime, timedelta, timezone
@@ -20,12 +21,16 @@ CEID = "US:en"
 
 STATE_FILE = "seen.json"
 
+KST = timezone(timedelta(hours=9))
+
 QUIET_HOUR_START = 21
 QUIET_HOUR_END = 6
 
 MAX_ITEMS_PER_RUN = 10
 MAX_ENTRIES_PER_QUERY = 8
-MAX_AGE_DAYS = 30
+
+NEWS_DATE_WINDOW_DAYS = 1
+REUTERS_PRIORITY_BONUS = 100
 
 SEND_INTERVAL_SECONDS = 2
 MAX_RETRY = 5
@@ -299,19 +304,38 @@ def title_hash(title: str) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
 
 
-def format_date(date_str: str) -> str:
-    if not date_str:
-        return "Unknown date"
+def get_published_datetime_utc(entry):
+    """
+    RSS entry의 published_parsed 값을 UTC datetime으로 변환
+    발행일이 없으면 None 반환
+    """
 
     try:
-        dt = datetime.strptime(date_str[:25], "%a, %d %b %Y %H:%M:%S")
-        return dt.strftime("%d %b %Y (%a)")
-    except Exception:
-        return date_str[:30]
+        if hasattr(entry, "published_parsed") and entry.published_parsed:
+            return datetime.fromtimestamp(
+                calendar.timegm(entry.published_parsed),
+                tz=timezone.utc
+            )
+
+    except Exception as e:
+        print(f"Published datetime parse failed: {e}")
+
+    return None
+
+
+def format_entry_date(entry) -> str:
+    published_utc = get_published_datetime_utc(entry)
+
+    if not published_utc:
+        return "Unknown date"
+
+    published_kst = published_utc.astimezone(KST)
+
+    return published_kst.strftime("%d %b %Y (%a) %H:%M KST")
 
 
 def is_quiet_time_kst() -> bool:
-    now_kst = datetime.now(timezone(timedelta(hours=9))).hour
+    now_kst = datetime.now(KST).hour
     return now_kst >= QUIET_HOUR_START or now_kst < QUIET_HOUR_END
 
 
@@ -336,18 +360,31 @@ def is_preferred_source(source: str) -> bool:
     return any(s.lower() in source.lower() for s in PREFERRED_SOURCES)
 
 
-def is_recent_entry(entry) -> bool:
-    try:
-        if hasattr(entry, "published_parsed") and entry.published_parsed:
-            dt = datetime.fromtimestamp(
-                time.mktime(entry.published_parsed),
-                tz=timezone.utc
-            )
-            return datetime.now(timezone.utc) - dt <= timedelta(days=MAX_AGE_DAYS)
-    except Exception:
-        pass
+def is_reuters_source(source: str) -> bool:
+    source = source or ""
+    return "reuters" in source.lower()
 
-    return True
+
+def is_recent_entry(entry) -> bool:
+    """
+    KST 기준 오늘과 어제 올라온 기사만 허용
+    발행일이 없는 기사는 제외
+    """
+
+    published_utc = get_published_datetime_utc(entry)
+
+    if not published_utc:
+        return False
+
+    published_kst_date = published_utc.astimezone(KST).date()
+
+    today_kst = datetime.now(KST).date()
+    yesterday_kst = today_kst - timedelta(days=NEWS_DATE_WINDOW_DAYS)
+
+    return published_kst_date in {
+        today_kst,
+        yesterday_kst
+    }
 
 
 def detect_project(title: str, summary: str) -> str:
@@ -397,7 +434,9 @@ def calculate_score(title, summary, source, category, project):
 
     score = 0
 
-    if is_preferred_source(source):
+    if is_reuters_source(source):
+        score += REUTERS_PRIORITY_BONUS
+    elif is_preferred_source(source):
         score += 2
 
     if project:
@@ -508,9 +547,7 @@ def fetch_news():
                     "category": category,
                     "keyword": query,
                     "project": project,
-                    "published": format_date(
-                        entry.get("published", "")
-                    ),
+                    "published": format_entry_date(entry),
                     "score": score,
                     "importance": get_importance(score),
                     "title_hash": title_hash(title),
@@ -558,6 +595,7 @@ def select_by_category_quota(items):
 
         category_items.sort(
             key=lambda x: (
+                is_reuters_source(x["source"]),
                 x["score"],
                 is_preferred_source(x["source"]),
                 bool(x["project"]),
@@ -569,6 +607,7 @@ def select_by_category_quota(items):
 
     selected.sort(
         key=lambda x: (
+            not is_reuters_source(x["source"]),
             list(CATEGORY_QUOTA.keys()).index(
                 x["category"]
             ),
